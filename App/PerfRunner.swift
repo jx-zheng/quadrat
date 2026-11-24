@@ -27,13 +27,13 @@ enum PerfRunner {
         if !skipRoot && directory != "/" {
             let root = scan(path: "/", displayName: "Macintosh HD")
             report["rootScan"] = root.json
-            _ = malloc_zone_pressure_relief(nil, Int.max)
+            ResidentMemory.relieve()
         }
 
         if !skipSynthetic {
             let synthetic = scanSynthetic()
             report["synthetic"] = synthetic.json
-            _ = malloc_zone_pressure_relief(nil, Int.max)
+            ResidentMemory.relieve()
         }
 
         let directoryScan = scan(path: directory, displayName: URL(fileURLWithPath: directory).lastPathComponent)
@@ -51,7 +51,7 @@ enum PerfRunner {
             ]
         }
         benchStore = nil
-        _ = malloc_zone_pressure_relief(nil, Int.max)
+        ResidentMemory.relieve()
 
         if idleSeconds > 0 {
             report["idle"] = measureIdle(seconds: idleSeconds)
@@ -126,6 +126,7 @@ enum PerfRunner {
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
             "heapInUseBytes": heapInUse(),
+            "zones": ResidentMemory.zoneSummary(),
             "hardLinks": engine.hardLinkCount,
             "inaccessible": stats.inaccessible,
             "usedBulkLister": stats.usedBulkLister
@@ -133,9 +134,7 @@ enum PerfRunner {
     }
 
     private static func heapInUse() -> Int {
-        var stats = malloc_statistics_t()
-        malloc_zone_statistics(malloc_default_zone(), &stats)
-        return Int(stats.size_in_use)
+        Int(ResidentMemory.heapInUse())
     }
 
     private static func measureIdle(seconds: Double) -> [String: Any] {
@@ -299,8 +298,9 @@ private final class PeakSampler {
         Thread.detachNewThread { [weak self] in
             guard let self else { return }
             while self.running {
-                // Drop malloc caches first so the sample is memory still in use.
-                _ = malloc_zone_pressure_relief(nil, Int.max)
+                // The scan's buffers are not all in the default zone. Purge every zone
+                // so a sample is not a cache of freed Swift allocations.
+                ResidentMemory.relieve()
                 let sample = ResidentMemory.currentBytes()
                 if sample > self.peak { self.peak = sample }
                 Thread.sleep(forTimeInterval: 0.05)

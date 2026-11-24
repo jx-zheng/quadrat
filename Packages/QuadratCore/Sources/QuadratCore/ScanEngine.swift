@@ -477,7 +477,7 @@ public final class ScanEngine {
         let due = (completions & 127) == 0
         lock.unlock()
         if due {
-            _ = malloc_zone_pressure_relief(nil, Int.max)
+            ResidentMemory.relieve()
         }
         #endif
     }

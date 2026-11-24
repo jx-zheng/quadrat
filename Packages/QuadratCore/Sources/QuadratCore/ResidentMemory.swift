@@ -25,4 +25,54 @@ public enum ResidentMemory {
         return residentPages * 4096
         #endif
     }
+
+    /// Bytes still allocated in every malloc zone, not just the default one.
+    public static func heapInUse() -> UInt64 {
+        #if os(macOS)
+        var total: UInt64 = 0
+        forEachZone { _, stats in
+            total += UInt64(stats.size_in_use)
+        }
+        return total
+        #else
+        return 0
+        #endif
+    }
+
+    public static func zoneSummary() -> String {
+        #if os(macOS)
+        var parts: [String] = []
+        forEachZone { zone, stats in
+            let name = zone.pointee.zone_name.map { String(cString: $0) } ?? "?"
+            parts.append("\(name)=\(stats.size_in_use)")
+        }
+        return parts.joined(separator: ",")
+        #else
+        return ""
+        #endif
+    }
+
+    /// Ask every zone to return freed pages. `nil` on the default call was not enough.
+    public static func relieve() {
+        #if os(macOS)
+        forEachZone { zone, _ in
+            _ = malloc_zone_pressure_relief(zone, 0)
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private static func forEachZone(_ body: (UnsafeMutablePointer<malloc_zone_t>, malloc_statistics_t) -> Void) {
+        var addresses: UnsafeMutablePointer<vm_address_t>?
+        var count: UInt32 = 0
+        let rc = malloc_get_all_zones(mach_task_self_, nil, &addresses, &count)
+        guard rc == KERN_SUCCESS, let addresses else { return }
+        for index in 0..<Int(count) {
+            guard let zone = UnsafeMutablePointer<malloc_zone_t>(bitPattern: UInt(addresses[index])) else { continue }
+            var stats = malloc_statistics_t()
+            malloc_zone_statistics(zone, &stats)
+            body(zone, stats)
+        }
+    }
+    #endif
 }
