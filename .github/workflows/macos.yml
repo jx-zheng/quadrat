@@ -101,6 +101,49 @@ jobs:
             exit 1
           fi
 
+      - name: Upload snapshots and perf
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-results
+          path: |
+            /tmp/quadrat-snapshots/
+            /tmp/quadrat-perf/perf.json
+            /tmp/quadrat-leaks/leaks.txt
+          if-no-files-found: error
+
+  demo:
+    name: demo video
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project Quadrat.xcodeproj \
+            -scheme Quadrat \
+            -configuration Release \
+            -derivedDataPath /tmp/quadrat-dd \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=YES \
+            build
+
+      - name: Locate app
+        id: app
+        run: |
+          APP="/tmp/quadrat-dd/Build/Products/Release/Quadrat.app"
+          test -d "$APP"
+          echo "bin=$APP/Contents/MacOS/Quadrat" >> "$GITHUB_OUTPUT"
+
       - name: Demo video
         timeout-minutes: 12
         run: |
@@ -163,16 +206,6 @@ jobs:
           assert fps >= 30, fps
           assert 60 <= duration <= 90, duration
           PY
-
-      - name: Upload snapshots and perf
-        uses: actions/upload-artifact@v4
-        with:
-          name: quadrat-results
-          path: |
-            /tmp/quadrat-snapshots/
-            /tmp/quadrat-perf/perf.json
-            /tmp/quadrat-leaks/leaks.txt
-          if-no-files-found: error
 
       - name: Upload demo
         uses: actions/upload-artifact@v4
