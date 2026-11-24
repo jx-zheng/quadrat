@@ -95,7 +95,7 @@ enum PerfRunner {
     }
 
     private static func scan(path: String, displayName: String) -> Phase {
-        let engine = ScanEngine()
+        let engine = ScanEngine(workerCount: 8)
         let sampler = PeakSampler()
         sampler.start(relieve: path == "/")
         let started = Date()

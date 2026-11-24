@@ -101,6 +101,44 @@ jobs:
             exit 1
           fi
 
+      - name: Demo video
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/quadrat-demo
+          BIN="${{ steps.app.outputs.bin }}"
+          MOV=/tmp/quadrat-demo/capture.mov
+          OUT=/tmp/quadrat-demo/quadrat-demo.mp4
+          screencapture -v "$MOV" &
+          CAP=$!
+          sleep 1
+          "$BIN" --demo
+          sleep 1
+          kill -INT "$CAP" || true
+          wait "$CAP" || true
+          test -s "$MOV"
+          if ! command -v ffmpeg >/dev/null; then
+            brew install ffmpeg
+          fi
+          ffmpeg -y -i "$MOV" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT"
+          python3 - <<'PY'
+          import json, subprocess
+          raw = subprocess.check_output([
+              "ffprobe", "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height,codec_name:format=duration",
+              "-of", "json", "/tmp/quadrat-demo/quadrat-demo.mp4",
+          ])
+          info = json.loads(raw)
+          stream = info["streams"][0]
+          width, height = int(stream["width"]), int(stream["height"])
+          duration = float(info["format"]["duration"])
+          print(f"demo {width}x{height} {stream['codec_name']} {duration:.1f}s")
+          assert stream["codec_name"] == "h264"
+          assert width >= 1280 and height >= 800
+          assert 60 <= duration <= 130
+          PY
+
       - name: Upload snapshots and perf
         uses: actions/upload-artifact@v4
         with:
@@ -109,4 +147,11 @@ jobs:
             /tmp/quadrat-snapshots/
             /tmp/quadrat-perf/perf.json
             /tmp/quadrat-leaks/leaks.txt
+          if-no-files-found: error
+
+      - name: Upload demo
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-demo
+          path: /tmp/quadrat-demo/quadrat-demo.mp4
           if-no-files-found: error

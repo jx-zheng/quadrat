@@ -160,7 +160,7 @@ public final class ScanEngine {
             drain(worker: 0)
         } else {
             let group = DispatchGroup()
-            let pool = DispatchQueue(label: "com.kevinzheng.quadrat.scan", qos: .utility, attributes: .concurrent)
+            let pool = DispatchQueue(label: "com.kevinzheng.quadrat.scan", qos: .userInitiated, attributes: .concurrent)
             for worker in 0..<workerCount {
                 group.enter()
                 pool.async {
@@ -451,11 +451,22 @@ public final class ScanEngine {
         // A concrete call lets the compiler inline the per-file body. Going through
         // the protocol witness was most of the time in a million-file directory.
         let outcome: ListOutcome
+        #if os(macOS)
         if let bulk = lister as? BulkDirectoryListing {
-            outcome = bulk.enumerateStream(path: path, rootDevice: rootDevice, body)
+            let page = bulk.read(path: path, rootDevice: rootDevice)
+            if case .entries = page.outcome {
+                page.forEach(body)
+                lock.lock()
+                usedBulkLister = true
+                lock.unlock()
+            }
+            outcome = page.outcome
         } else {
             outcome = lister.enumerateStream(path: path, rootDevice: rootDevice, body)
         }
+        #else
+        outcome = lister.enumerateStream(path: path, rootDevice: rootDevice, body)
+        #endif
         if case .unsupported = outcome, let fallback {
             return fallback.enumerateStream(path: path, rootDevice: rootDevice, body)
         }

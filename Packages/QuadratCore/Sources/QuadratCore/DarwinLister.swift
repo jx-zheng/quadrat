@@ -3,10 +3,116 @@ import Foundation
 #if os(macOS)
 import Darwin
 
+struct BulkItem {
+    var nameOffset: Int32
+    var nameLength: UInt16
+    var allocBytes: UInt64
+    var logicalBytes: UInt64
+    var linkCount: UInt32
+    var device: UInt64
+    var fileID: UInt64
+    var bits: UInt8
+
+    static let directory: UInt8 = 1
+    static let symlink: UInt8 = 2
+    static let mount: UInt8 = 4
+    static let denied: UInt8 = 8
+}
+
+struct BulkPage {
+    var storage: [UInt8] = []
+    var items: [BulkItem] = []
+    var outcome: ListOutcome = .failed
+
+    func forEach(_ body: (StreamedRecord) -> Void) {
+        storage.withUnsafeBufferPointer { raw in
+            guard let base = raw.baseAddress else { return }
+            for item in items {
+                let name = UnsafeBufferPointer(start: base + Int(item.nameOffset), count: Int(item.nameLength))
+                body(StreamedRecord(
+                    name: name,
+                    allocBytes: item.allocBytes,
+                    logicalBytes: item.logicalBytes,
+                    linkCount: item.linkCount,
+                    device: item.device,
+                    fileID: item.fileID,
+                    isDirectory: item.bits & BulkItem.directory != 0,
+                    isSymlink: item.bits & BulkItem.symlink != 0,
+                    isMountPoint: item.bits & BulkItem.mount != 0,
+                    mayShareBlocks: false,
+                    privateBytes: 0,
+                    inaccessible: item.bits & BulkItem.denied != 0
+                ))
+            }
+        }
+    }
+}
+
 /// Parallel-friendly `getattrlistbulk` lister. One open directory fd per call; the caller
 /// bounds how many calls run at once. Symlinks are not followed (`O_NOFOLLOW`, `FSOPT_NOFOLLOW`).
 public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     public init() {}
+
+    func read(path: String, rootDevice: UInt64) -> BulkPage {
+        var page = BulkPage()
+        let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
+        if fd < 0 {
+            if errno == EACCES || errno == EPERM { page.outcome = .inaccessible }
+            else { page.outcome = .failed }
+            return page
+        }
+        defer { close(fd) }
+
+        var attr = attrlist()
+        memset(&attr, 0, MemoryLayout<attrlist>.size)
+        attr.bitmapcount = u_short(truncatingIfNeeded: ATTR_BIT_MAP_COUNT)
+        attr.commonattr = Self.group(ATTR_CMN_RETURNED_ATTRS)
+            | Self.group(ATTR_CMN_NAME)
+            | Self.group(ATTR_CMN_DEVID)
+            | Self.group(ATTR_CMN_OBJTYPE)
+            | Self.group(ATTR_CMN_FILEID)
+            | Self.group(ATTR_CMN_FLAGS)
+            | Self.group(ATTR_CMN_ERROR)
+        attr.dirattr = Self.group(ATTR_DIR_MOUNTSTATUS)
+        attr.fileattr = Self.group(ATTR_FILE_LINKCOUNT)
+            | Self.group(ATTR_FILE_TOTALSIZE)
+            | Self.group(ATTR_FILE_ALLOCSIZE)
+
+        var buffer = [UInt8](repeating: 0, count: 256 * 1024)
+        let options: UInt64 = 0
+        var yielded = 0
+        page.items.reserveCapacity(256)
+        while true {
+            let count: Int32 = buffer.withUnsafeMutableBytes { raw in
+                guard let base = raw.baseAddress else { return -1 }
+                return getattrlistbulk(fd, &attr, base, raw.count, options)
+            }
+            if count == 0 { break }
+            if count < 0 {
+                if errno == ENOTSUP || errno == ENOTTY || errno == EINVAL {
+                    page.outcome = yielded == 0 ? .unsupported : .entries([])
+                    return page
+                }
+                if errno == EACCES || errno == EPERM {
+                    page.outcome = .inaccessible
+                    return page
+                }
+                page.outcome = .failed
+                return page
+            }
+            if !Self.collect(buffer: buffer, count: Int(count), rootDevice: rootDevice, storage: &page.storage, into: &page.items) {
+                page.outcome = yielded == 0 ? .unsupported : .entries([])
+                return page
+            }
+            yielded += Int(count)
+        }
+        if yielded == 0 {
+            page.outcome = .unsupported
+            return page
+        }
+        page.outcome = .entries([])
+        return page
+    }
 
     public func list(path: String, rootDevice: UInt64) -> ListOutcome {
         var entries: [ListedEntry] = []
@@ -103,6 +209,114 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         let extFlags = Self.readU32(buffer, 12)
         let shares = (extFlags & 0x80) != 0 // EF_MAY_SHARE_BLOCKS
         return (shares, privateSize)
+    }
+
+    @inline(__always)
+    private static func collect(
+        buffer: [UInt8],
+        count: Int,
+        rootDevice: UInt64,
+        storage: inout [UInt8],
+        into items: inout [BulkItem]
+    ) -> Bool {
+        buffer.withUnsafeBufferPointer { raw in
+            guard let base = raw.baseAddress else { return false }
+            return collect(base: base, count: count, length: raw.count, rootDevice: rootDevice, storage: &storage, into: &items)
+        }
+    }
+
+    private static func collect(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        length bufferCount: Int,
+        rootDevice: UInt64,
+        storage: inout [UInt8],
+        into items: inout [BulkItem]
+    ) -> Bool {
+        var cursor = 0
+        let errorBit = group(ATTR_CMN_ERROR)
+        let nameBit = group(ATTR_CMN_NAME)
+        let devBit = group(ATTR_CMN_DEVID)
+        let typeBit = group(ATTR_CMN_OBJTYPE)
+        let flagsBit = group(ATTR_CMN_FLAGS)
+        let fileBit = group(ATTR_CMN_FILEID)
+        let mountBit = group(ATTR_DIR_MOUNTSTATUS)
+        let linkBit = group(ATTR_FILE_LINKCOUNT)
+        let totalBit = group(ATTR_FILE_TOTALSIZE)
+        let allocBit = group(ATTR_FILE_ALLOCSIZE)
+        let point = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
+        for _ in 0..<count {
+            if cursor + 4 > bufferCount { return false }
+            let recordLength = Int(readU32(base, cursor))
+            if recordLength < 24 || cursor + recordLength > bufferCount { return false }
+            let record = cursor
+            var field = cursor + 4
+            let common = readU32(base, field)
+            let dir = readU32(base, field + 8)
+            let file = readU32(base, field + 12)
+            field += 20
+            func take32() -> UInt32 {
+                let value = field + 4 <= record + recordLength ? readU32(base, field) : 0
+                field += 4
+                return value
+            }
+            func take64() -> UInt64 {
+                let value = field + 8 <= record + recordLength ? readU64(base, field) : 0
+                field += 8
+                return value
+            }
+            let error = (common & errorBit) != 0 ? take32() : 0
+            var nameStart = 0
+            var nameCount = 0
+            if (common & nameBit) != 0, field + 8 <= record + recordLength {
+                let nameRef = field
+                let nameDelta = Int(readI32(base, field))
+                let nameLength = Int(readU32(base, field + 4))
+                field += 8
+                let start = nameRef + nameDelta
+                if start >= record, start + max(0, nameLength) <= record + recordLength, nameLength > 0 {
+                    nameStart = start
+                    var trimmed = nameLength
+                    while trimmed > 0 && base[start + trimmed - 1] == 0 { trimmed -= 1 }
+                    nameCount = trimmed
+                }
+            }
+            let devid = (common & devBit) != 0 ? take32() : 0
+            let objType = (common & typeBit) != 0 ? take32() : 0
+            if (common & flagsBit) != 0 { _ = take32() }
+            let fileID = (common & fileBit) != 0 ? take64() : 0
+            let mountStatus = (dir & mountBit) != 0 ? take32() : 0
+            let linkCount = (file & linkBit) != 0 ? take32() : 1
+            let totalSize = (file & totalBit) != 0 ? take64() : 0
+            let allocSize = (file & allocBit) != 0 ? take64() : 0
+            if nameCount == 0 || (nameCount == 1 && base[nameStart] == 46) || (nameCount == 2 && base[nameStart] == 46 && base[nameStart + 1] == 46) {
+                cursor += recordLength
+                continue
+            }
+            let offset = storage.count
+            storage.append(contentsOf: UnsafeBufferPointer(start: base + nameStart, count: nameCount))
+            var bits: UInt8 = 0
+            let isDir = objType == VDIR.rawValue
+            if isDir { bits |= BulkItem.directory }
+            if objType == VLNK.rawValue { bits |= BulkItem.symlink }
+            let device = UInt64(devid)
+            if isDir && ((mountStatus & point) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0)) {
+                bits |= BulkItem.mount
+            }
+            if error == UInt32(EACCES) || error == UInt32(EPERM) { bits |= BulkItem.denied }
+            items.append(BulkItem(
+                nameOffset: Int32(offset),
+                nameLength: UInt16(min(nameCount, Int(UInt16.max))),
+                allocBytes: allocSize,
+                logicalBytes: totalSize,
+                linkCount: linkCount == 0 ? 1 : linkCount,
+                device: device,
+                fileID: fileID,
+                bits: bits
+            ))
+            cursor += recordLength
+        }
+        return true
     }
 
     @inline(__always)

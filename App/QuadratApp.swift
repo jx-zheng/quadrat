@@ -60,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PerfRunner.run(directory: args[index + 1], arguments: args)
             exit(0)
         }
+        if args.contains("--demo") {
+            DemoRunner.start(model: model)
+            return
+        }
         model.refreshVolumes()
     }
 
