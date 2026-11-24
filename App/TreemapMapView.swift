@@ -153,7 +153,13 @@ final class TreemapMapView: NSView {
                 box.frame = rect
                 box.isHidden = rect.width < 1 || rect.height < 1
                 let rgb = QuadratTheme.components(tile.kind, scheme, variant: tile.id)
-                box.backgroundColor = NSColor(calibratedRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1).cgColor
+                let group = tile.header > 1 ? 0.62 : 1.0
+                box.backgroundColor = NSColor(
+                    calibratedRed: rgb.0 * group,
+                    green: rgb.1 * group,
+                    blue: rgb.2 * group,
+                    alpha: 1
+                ).cgColor
                 box.cornerRadius = min(5, max(2, min(rect.width, rect.height) / 4))
                 box.contents = nil
                 box.contentsScale = scale

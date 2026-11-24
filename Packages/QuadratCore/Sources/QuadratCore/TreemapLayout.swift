@@ -340,6 +340,16 @@ public struct TreemapLayout: Equatable, Sendable {
             if newly.isEmpty && remainderFits {
                 return current
             }
+            // A crowded first cut can fail every label at once. Keep the largest tiles and
+            // try again so a big folder shows named children instead of one giant fold.
+            if newly.count > 1 {
+                let real = current.boxes.filter { !TileFold.isRemainder($0.id) && newly.contains($0.id) }
+                if real.count == newly.count {
+                    let ranked = real.sorted { ($0.width * $0.height) > ($1.width * $1.height) }
+                    let keep = Set(ranked.prefix(max(1, ranked.count / 2)).map(\.id))
+                    newly.subtract(keep)
+                }
+            }
             if !remainderFits && newly.isEmpty {
                 let keptIDs = Set(current.boxes.filter { !TileFold.isRemainder($0.id) }.map(\.id))
                 let kept = items.filter { keptIDs.contains($0.id) }
