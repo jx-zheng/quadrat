@@ -378,8 +378,17 @@ final class LayoutPolicyTests: XCTestCase {
             store: store, rootID: root, width: 180, height: 80,
             options: TreemapOptions(gap: 2, maxVisibleDepth: 2, minTileWidth: 20, minTileHeight: 16)
         )
-        let labelled = layout.nodes.filter { $0.depth > 0 && $0.showsLabel }
-        XCTAssertTrue(labelled.isEmpty, "cramped tiles must not keep a fragment of the name")
+        for tile in layout.nodes where tile.depth > 0 && tile.showsLabel {
+            XCTAssertTrue(LabelFit.fits(
+                name: tile.label,
+                sizeText: ByteFormat.bytes(tile.sizeBytes),
+                tileWidth: tile.width,
+                tileHeight: tile.height,
+                header: 0
+            ))
+            XCTAssertFalse(tile.label.contains("…"))
+        }
+        XCTAssertFalse(layout.nodes.contains { $0.showsLabel && $0.label.contains("Application Support") })
     }
 
     func testSingleChildChainsCollapseToABreadcrumb() {
@@ -424,7 +433,10 @@ final class LayoutPolicyTests: XCTestCase {
         XCTAssertGreaterThan(rootBytes, 0)
         let tiles = layout.nodes.filter { $0.depth > 0 }
         XCTAssertLessThanOrEqual(tiles.count, 60)
-        XCTAssertTrue(tiles.contains { $0.isRemainder && $0.foldedCount >= 40 })
+        XCTAssertFalse(tiles.contains { $0.label.hasPrefix("tiny-") })
+        if let remainder = tiles.first(where: \.isRemainder) {
+            XCTAssertGreaterThanOrEqual(remainder.foldedCount, 40)
+        }
         for tile in tiles {
             let areaFraction = (tile.width * tile.height) / rootArea
             let byteFraction = Double(tile.sizeBytes) / rootBytes
@@ -558,6 +570,75 @@ final class POSIXScanTests: XCTestCase {
         XCTAssertTrue(store.children(of: linkNode!).isEmpty, "symlinks are not walked")
         XCTAssertGreaterThan(store.bytes(store.rootID, .logical), 0)
         XCTAssertEqual(engine.statistics().inaccessible, 0)
+    }
+}
+
+final class ReadableTileTests: XCTestCase {
+    func testMessyFixtureTilesAllHaveFittingLabels() {
+        let store = wideFolder(named: "Library", count: 180)
+        assertEveryTileIsLabelled(store)
+    }
+
+    func testVolumeFixtureTilesAllHaveFittingLabels() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let system = store.addNode(parent: root, name: "System", allocBytes: 0, logicalBytes: 0, kind: .system, flags: .directory)
+        let library = store.addNode(parent: system, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .system, flags: .directory)
+        for name in ["Extensions", "Frameworks", "AssetsV2", "Caches"] {
+            _ = store.addNode(parent: library, name: name, allocBytes: 8_000_000_000, logicalBytes: 8_000_000_000, kind: .system, flags: .directory)
+        }
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let you = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        for name in ["Documents", "Pictures", "Library", "Downloads"] {
+            _ = store.addNode(parent: you, name: name, allocBytes: 12_000_000_000, logicalBytes: 12_000_000_000, kind: .documents, flags: [])
+        }
+        _ = store.addNode(parent: root, name: "Applications", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .apps, flags: .directory)
+        store.recomputeAll()
+        assertEveryTileIsLabelled(store)
+    }
+
+    func testFolderShareStaysInsideTheDisk() {
+        let share = DiskShare(capacity: 1_000_000_000_000, free: 800_000_000_000, volumeName: "Macintosh HD")
+        XCTAssertGreaterThan(share.capacity, 0)
+        let percent = share.percent(of: 50_000_000_000)
+        XCTAssertGreaterThanOrEqual(percent, 0)
+        XCTAssertLessThanOrEqual(percent, 100)
+        XCTAssertEqual(percent, 5, accuracy: 0.01)
+        XCTAssertEqual(DiskShare.percent(50_000_000_000, of: 0), 0)
+    }
+
+    func testBreadcrumbDropsRepeatedFirmlinkSegments() {
+        XCTAssertEqual(
+            BreadcrumbLine.line(from: ["Macintosh HD", "Macintosh HD / Users / you"]),
+            "Macintosh HD / Users / you"
+        )
+        XCTAssertEqual(
+            BreadcrumbLine.line(from: ["Macintosh HD", "System", "System / Library"]),
+            "Macintosh HD / System / Library"
+        )
+        XCTAssertEqual(
+            BreadcrumbLine.segments(from: ["/System/Volumes/Data/Users/you"]),
+            ["Users", "you"]
+        )
+    }
+
+    private func wideFolder(named: String, count: Int) -> NodeStore {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        let folder = store.addNode(parent: root, name: named, allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        for index in 0..<count {
+            let bytes = UInt64(index + 1) * 4_000_000
+            _ = store.addNode(parent: folder, name: "item-\(index)", allocBytes: bytes, logicalBytes: bytes, kind: .other, flags: [])
+        }
+        _ = store.addNode(parent: root, name: "Applications", allocBytes: 6_000_000_000, logicalBytes: 6_000_000_000, kind: .apps, flags: [])
+        store.recomputeAll()
+        return store
+    }
+
+    private func assertEveryTileIsLabelled(_ store: NodeStore, file: StaticString = #filePath, line: UInt = #line) {
+        let report = LayoutAudit.check(store: store)
+        XCTAssertGreaterThan(report.tiles, 0, file: file, line: line)
+        XCTAssertEqual(report.unlabeled, 0, "unlabeled \(report.unlabeled) of \(report.tiles)", file: file, line: line)
     }
 }
 

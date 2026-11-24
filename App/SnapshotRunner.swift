@@ -33,6 +33,87 @@ enum SnapshotRunner {
         }
     }
 
+    /// One large depth-capped tile. The centre must be a flat colour, not a stretched placeholder.
+    static func renderLeafProbe(to path: String) {
+        let view = TreemapMapView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+        view.backingScale = 2
+        var picture = MapPicture()
+        picture.tiles = [TileDraw(
+            id: 7,
+            x: 0, y: 0, width: 480, height: 320,
+            header: 0,
+            kind: .developer,
+            name: "Library",
+            sizeText: "40.6 GB",
+            showsLabel: true,
+            hatched: false,
+            depth: 1,
+            hasChildren: false,
+            isRemainder: false,
+            isDepthCapped: true,
+            bytes: 40_600_000_000
+        )]
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        view.layoutSubtreeIfNeeded()
+        view.show(picture: picture, scheme: .light)
+        CATransaction.flush()
+        let scale: CGFloat = 2
+        let pixelsWide = Int(view.bounds.width * scale)
+        let pixelsHigh = Int(view.bounds.height * scale)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelsWide,
+            pixelsHigh: pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            FileHandle.standardError.write(Data("pixel check could not allocate a bitmap\n".utf8))
+            exit(1)
+        }
+        rep.size = view.bounds.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.translateBy(x: 0, y: CGFloat(pixelsHigh))
+            context.scaleBy(x: scale, y: -scale)
+            view.layer?.render(in: context)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        var low = [255, 255, 255]
+        var high = [0, 0, 0]
+        let cx = pixelsWide / 2
+        let cy = pixelsHigh / 2
+        for y in (cy - 24)...(cy + 24) {
+            for x in (cx - 24)...(cx + 24) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let channels = [
+                    Int((color.redComponent * 255).rounded()),
+                    Int((color.greenComponent * 255).rounded()),
+                    Int((color.blueComponent * 255).rounded())
+                ]
+                for index in 0..<3 {
+                    low[index] = min(low[index], channels[index])
+                    high[index] = max(high[index], channels[index])
+                }
+            }
+        }
+        let spread = zip(low, high).map(-).map(abs).max() ?? 255
+        if spread > 8 || high[2] < 40 {
+            FileHandle.standardError.write(Data("leaf tile centre is not a flat colour (spread \(spread), blue \(high[2]))\n".utf8))
+            exit(1)
+        }
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = rep.representation(using: .png, properties: [:]) else { exit(1) }
+        try? data.write(to: url)
+    }
+
     /// Scan a real directory and write the main window at 1440×900 pt, @2x.
     static func render(path: String, to out: String, scheme: ColorScheme, drill: Bool = false) {
         let model = scannedModel(path: path)

@@ -26,7 +26,12 @@ enum PerfRunner {
         // scan itself rather than pages still held from the synthetic tree.
         if !skipRoot && directory != "/" {
             let root = scan(path: "/", displayName: "Macintosh HD")
+            let audit = LayoutAudit.check(store: root.store)
             report["rootScan"] = root.json
+            report["rootLayout"] = [
+                "tiles": audit.tiles,
+                "unlabeled": audit.unlabeled
+            ]
             ResidentMemory.relieve()
         }
 
@@ -56,7 +61,9 @@ enum PerfRunner {
                 "zoomP99Ms": frames.zoomP99Ms,
                 "hoverSamples": frames.hoverSamples,
                 "zoomSamples": frames.zoomSamples,
-                "method": "NSView.display + CATransaction.flush"
+                "backingScale": frames.backingScale,
+                "hoverDrawCount": frames.hoverDrawCount,
+                "method": "mouseMoved + highlight layer, no tile redraw"
             ]
         }
 
@@ -96,6 +103,7 @@ enum PerfRunner {
         var scanJSON = bestJSON
         scanJSON["passes"] = 3
         scanJSON["path"] = session.scanRoot
+        let audit = LayoutAudit.check(store: store)
         let frames = RenderBench.measureInteraction(store: store, width: 1440, height: 900, scale: 2)
         let peak = process.stop()
         let heldFootprint = Int(peak.footprint)
@@ -113,7 +121,9 @@ enum PerfRunner {
             "layoutMs": frames.layoutMs,
             "backingScale": frames.backingScale,
             "hoverDrawCount": frames.hoverDrawCount,
-            "windowPoints": "1440x900"
+            "windowPoints": "1440x900",
+            "unlabeledTiles": audit.unlabeled,
+            "visibleTiles": audit.tiles
         ]
         let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         if let out {
@@ -243,7 +253,7 @@ enum RenderBench {
     }
 
     static func measure(store: NodeStore) -> Result {
-        measureInteraction(store: store, hoverSamples: 40, zoomSamples: 20, width: 1200, height: 740, scale: 2)
+        measureInteraction(store: store, hoverSamples: 525, zoomSamples: 20, width: 1440, height: 900, scale: 2)
     }
 
     /// Real mouse-moved events on a 2x layer-backed view. Hover must not redraw the tile bitmap.

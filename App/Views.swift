@@ -268,11 +268,6 @@ struct FullDiskAccessCard: View {
                 Button("Open System Settings") { model.openAccessSettings() }
                     .buttonStyle(.borderedProminent)
             }
-            Text(FullDiskAccess.settingsURL.absoluteString)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
         .padding(22)
         .frame(width: 560)
@@ -409,11 +404,17 @@ struct WorkspaceView: View {
             return "Scanning… \(ByteFormat.grouped(UInt64(items))) items · \(ByteFormat.rate(rate))"
         }
         if !model.isZoomed, let volume = model.activeVolume, volume.capacity > 0 {
+            if volume.detail.hasPrefix("On ") {
+                let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.store.rootID)
+                let name = String(volume.detail.dropFirst(3))
+                return "\(ByteFormat.bytes(bytes)) · \(model.percentOfDisk(bytes)) of \(name)"
+            }
             return "\(ByteFormat.bytes(volume.used)) used · \(ByteFormat.percent(volume.used, of: volume.capacity)) · \(ByteFormat.bytes(volume.free)) free"
         }
         let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.zoomID)
-        let whole = model.activeVolume?.capacity ?? bytes
-        return "\(ByteFormat.bytes(bytes)) · \(ByteFormat.percent(bytes, of: max(whole, 1))) of disk"
+        let capacity = model.activeVolume?.capacity ?? 0
+        guard capacity > 0 else { return ByteFormat.bytes(bytes) }
+        return "\(ByteFormat.bytes(bytes)) · \(ByteFormat.percent(bytes, of: capacity)) of disk"
     }
 
     private var scanProgress: some View {
@@ -580,7 +581,7 @@ struct WorkspaceView: View {
                 Image(systemName: model.store.isDirectory(id) ? "folder.fill" : "doc.fill")
                     .foregroundStyle(QuadratTheme.kind(model.store.kind(id), scheme))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("\(model.displayName(of: id))  \(ByteFormat.bytes(model.nodeBytes(id))) · \(ByteFormat.percent(model.nodeBytes(id), of: model.activeVolume?.capacity ?? model.nodeBytes(model.store.rootID))) of disk · \(itemPhrase(id))")
+                    Text("\(model.displayName(of: id))  \(ByteFormat.bytes(model.nodeBytes(id))) · \(model.percentOfDisk(model.nodeBytes(id))) of disk · \(itemPhrase(id))")
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Text(model.path(of: id))
@@ -701,23 +702,7 @@ struct TreemapCanvas: View, Equatable {
         let insetY = min(12, rect.height * 0.14)
         let inner = rect.insetBy(dx: insetX, dy: insetY)
         guard inner.width > 12, inner.height > 10 else { return }
-        let columns = inner.width > inner.height * 1.3 ? 3 : 2
-        let rows = 2
-        let gap = 3.0
-        let blockW = (inner.width - gap * Double(columns - 1)) / Double(columns)
-        let blockH = (inner.height - gap * Double(rows - 1)) / Double(rows)
-        let tint = Color.white.opacity(scheme == .dark ? 0.14 : 0.32)
-        for row in 0..<rows {
-            for column in 0..<columns {
-                let block = CGRect(
-                    x: inner.minX + Double(column) * (blockW + gap),
-                    y: inner.minY + Double(row) * (blockH + gap),
-                    width: blockW,
-                    height: blockH
-                )
-                clip.fill(Path(roundedRect: block, cornerRadius: 2), with: .color(tint))
-            }
-        }
+        _ = (clip, inner, scheme)
     }
 
     private func drawHatch(_ context: GraphicsContext, rect: CGRect, color: Color) {
@@ -743,18 +728,9 @@ struct HatchOverlay: View {
     var body: some View {
         Canvas { context, _ in
             let path = Path(rect)
-            context.fill(path, with: .color(scheme == .dark ? Color(red: 0.08, green: 0.08, blue: 0.09) : Color(red: 0.93, green: 0.93, blue: 0.93)))
-            var clip = context
-            clip.clip(to: path)
-            let color = scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
-            var x = rect.minX - rect.height
-            while x < rect.maxX + rect.height {
-                var line = Path()
-                line.move(to: CGPoint(x: x, y: rect.maxY))
-                line.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
-                clip.stroke(line, with: .color(color), lineWidth: 8)
-                x += 14
-            }
+            context.fill(path, with: .color(scheme == .dark ? Color(red: 0.16, green: 0.16, blue: 0.17) : Color(red: 0.90, green: 0.91, blue: 0.93)))
+            let bar = CGRect(x: rect.minX + 16, y: rect.maxY - 18, width: max(24, rect.width * 0.42), height: 4)
+            context.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(Color.accentColor.opacity(0.85)))
             let label = Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(scheme == .dark ? Color.white.opacity(0.8) : Color.black.opacity(0.55))
             let sub = Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
             context.draw(label, at: CGPoint(x: rect.minX + 16, y: rect.minY + 16), anchor: .topLeading)
@@ -785,7 +761,7 @@ struct TooltipCard: View {
 
     var body: some View {
         let bytes = model.nodeBytes(id)
-        let capacity = model.activeVolume?.capacity ?? bytes
+        let capacity = model.activeVolume?.capacity ?? 0
         let used = model.activeVolume?.used ?? model.nodeBytes(model.store.rootID)
         let flags = model.store.flags(id)
         VStack(alignment: .leading, spacing: 3) {
@@ -801,8 +777,8 @@ struct TooltipCard: View {
             Text(ByteFormat.bytes(bytes))
                 .font(.system(size: 22, weight: .semibold))
             HStack(spacing: 8) {
-                Text("\(ByteFormat.percent(bytes, of: max(capacity, 1))) of disk")
-                Text("\(ByteFormat.percent(bytes, of: max(used, 1))) of used")
+                Text("\(ByteFormat.percent(bytes, of: capacity)) of disk")
+                Text("\(ByteFormat.percent(bytes, of: used)) of used")
             }
             .font(.system(size: 12))
             .foregroundStyle(.secondary)

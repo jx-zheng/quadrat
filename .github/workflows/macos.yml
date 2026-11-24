@@ -60,12 +60,14 @@ jobs:
       - name: Perf
         run: |
           mkdir -p /tmp/quadrat-perf
-          "${{ steps.app.outputs.bin }}" \
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" \
             --perf /tmp/quadrat-synth \
             --out /tmp/quadrat-perf/perf.json \
-            --idle-seconds 30
+            --idle-seconds 30 \
+            > /tmp/quadrat-perf/stdout.txt 2> /tmp/quadrat-perf/time.txt
           python3 -m json.tool /tmp/quadrat-perf/perf.json >/dev/null
-          python3 -c 'import json; report=json.load(open("/tmp/quadrat-perf/perf.json")); peak=report["rootScan"]["peakRSSBytes"]; resident=report["rootScan"]["peakResidentBytes"]; rate=report["directoryScan"]["itemsPerSecond"]; print(f"root footprint {peak} resident {resident}; directory items/s {rate:.0f}"); assert peak < 100*1024*1024, "root footprint is over 100 MB"; assert resident < 170*1024*1024, "root resident size regressed"; assert rate >= 250000, "directory scan is slower than 250k items/s"'
+          python3 scripts/check_main_perf.py /tmp/quadrat-perf/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-perf/time.txt
           rm -rf /tmp/quadrat-synth
 
       - name: Leaks
@@ -98,10 +100,12 @@ jobs:
 
       - name: Messy perf and snapshots
         run: |
-          "${{ steps.app.outputs.bin }}" \
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" \
             --perf-path /tmp/quadrat-messy \
-            --out /tmp/quadrat-messy/perf.json
+            --out /tmp/quadrat-messy/perf.json \
+            > /tmp/quadrat-messy/stdout.txt 2> /tmp/quadrat-messy/time.txt
           python3 scripts/check_messy_perf.py /tmp/quadrat-messy/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-messy/time.txt
           "${{ steps.app.outputs.bin }}" \
             --snapshot-path /tmp/quadrat-messy \
             --snapshot-out /tmp/quadrat-messy/messy-light.png \
@@ -111,6 +115,11 @@ jobs:
             --snapshot-out /tmp/quadrat-messy/messy-dark.png \
             --snapshot-scheme dark
           find /tmp/quadrat-messy -mindepth 1 -maxdepth 1 ! -name perf.json ! -name 'messy-*.png' -exec rm -rf {} +
+
+      - name: Leaf tile pixel check
+        run: |
+          mkdir -p /tmp/quadrat-pixel
+          "${{ steps.app.outputs.bin }}" --pixel-check /tmp/quadrat-pixel/leaf.png
 
       - name: Volume, home, and drill snapshots
         run: |
@@ -125,7 +134,9 @@ jobs:
           path: |
             /tmp/quadrat-snapshots/
             /tmp/quadrat-perf/perf.json
+            /tmp/quadrat-perf/time.txt
             /tmp/quadrat-leaks/leaks.txt
+            /tmp/quadrat-pixel/leaf.png
           if-no-files-found: error
 
       - name: Upload messy fixture snapshots

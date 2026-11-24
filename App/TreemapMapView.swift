@@ -154,8 +154,11 @@ final class TreemapMapView: NSView {
                 let rgb = QuadratTheme.components(tile.kind, scheme, variant: tile.id)
                 box.backgroundColor = NSColor(calibratedRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1).cgColor
                 box.cornerRadius = min(5, max(2, min(rect.width, rect.height) / 4))
-                box.contents = tile.hatched ? Self.hatch : (tile.isDepthCapped ? Self.stipple : nil)
-                box.contentsGravity = .resizeAspectFill
+                box.contents = nil
+                box.sublayers?.filter { $0.name == "hatch" }.forEach { $0.removeFromSuperlayer() }
+                if tile.hatched {
+                    addHatch(to: box, size: rect.size)
+                }
                 label.isHidden = !tile.showsLabel || tile.name.isEmpty || rect.width < 36
                 label.frame = CGRect(x: 8, y: 6, width: max(0, rect.width - 16), height: min(32, max(0, rect.height - 10)))
                 label.string = tile.showsLabel && rect.height >= 36 ? "\(tile.name)\n\(tile.sizeText)" : tile.name
@@ -168,26 +171,23 @@ final class TreemapMapView: NSView {
         CATransaction.commit()
     }
 
-    private static let hatch: CGImage? = pattern(dots: false)
-    private static let stipple: CGImage? = pattern(dots: true)
-
-    private static func pattern(dots: Bool) -> CGImage? {
-        guard let context = CGContext(
-            data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        context.setFillColor(NSColor.white.withAlphaComponent(dots ? 0.22 : 0.35).cgColor)
-        if dots {
-            context.fillEllipse(in: CGRect(x: 6, y: 6, width: 3, height: 3))
-        } else {
-            context.setStrokeColor(NSColor.white.withAlphaComponent(0.45).cgColor)
-            context.setLineWidth(1)
-            context.move(to: CGPoint(x: 0, y: 16))
-            context.addLine(to: CGPoint(x: 16, y: 0))
-            context.strokePath()
+    private func addHatch(to box: CALayer, size: CGSize) {
+        let spacing: CGFloat = 8
+        var x = -size.height
+        while x < size.width {
+            let line = CAShapeLayer()
+            line.name = "hatch"
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: x, y: size.height))
+            path.addLine(to: CGPoint(x: x + size.height, y: 0))
+            line.path = path
+            line.strokeColor = NSColor.white.withAlphaComponent(0.35).cgColor
+            line.lineWidth = 1
+            line.frame = CGRect(origin: .zero, size: size)
+            line.zPosition = 0
+            box.insertSublayer(line, at: 0)
+            x += spacing
         }
-        return context.makeImage()
     }
 
     private func ensurePool(count: Int) {

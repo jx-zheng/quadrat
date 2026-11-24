@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
+        if let out = argument("--pixel-check", in: args) {
+            SnapshotRunner.renderLeafProbe(to: out)
+            exit(0)
+        }
         if let directory = argument("--snapshot-suite", in: args) {
             SnapshotRunner.renderSuite(into: directory)
             exit(0)

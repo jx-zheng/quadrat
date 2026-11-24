@@ -188,9 +188,13 @@ public struct TreemapLayout: Equatable, Sendable {
             parent: leaf,
             maxCount: cap
         )
+        let readable = retainReadable(
+            store: store, fold: folded, items: kids,
+            x: x, y: y, width: width, height: height, parent: leaf
+        )
         var childNodes: [Int] = []
-        childNodes.reserveCapacity(folded.boxes.count)
-        for box in folded.boxes where box.width > 0.05 && box.height > 0.05 {
+        childNodes.reserveCapacity(readable.boxes.count)
+        for box in readable.boxes where box.width > 0.05 && box.height > 0.05 {
             if visibleCount() >= options.maxTiles { break }
             let childRemainder = TileFold.isRemainder(box.id)
             childNodes.append(place(
@@ -201,8 +205,8 @@ public struct TreemapLayout: Equatable, Sendable {
                 width: box.width,
                 height: box.height,
                 depth: depth + 1,
-                foldedCount: childRemainder ? folded.foldedCount : 0,
-                foldedBytes: childRemainder ? UInt64(max(0, folded.foldedBytes.rounded())) : 0,
+                foldedCount: childRemainder ? readable.foldedCount : 0,
+                foldedBytes: childRemainder ? UInt64(max(0, readable.foldedBytes.rounded())) : 0,
                 opening: depth > 0
             ))
         }
@@ -252,9 +256,13 @@ public struct TreemapLayout: Equatable, Sendable {
                 parent: node.id,
                 maxCount: min(8, room)
             )
-            guard !folded.boxes.isEmpty else { continue }
+            let readable = retainReadable(
+                store: store, fold: folded, items: kids,
+                x: node.x, y: node.y, width: node.width, height: node.height, parent: node.id
+            )
+            guard !readable.boxes.isEmpty else { continue }
             var childNodes: [Int] = []
-            for box in folded.boxes where box.width > 0.05 && box.height > 0.05 {
+            for box in readable.boxes where box.width > 0.05 && box.height > 0.05 {
                 if visibleCount() >= options.maxTiles { break }
                 let childRemainder = TileFold.isRemainder(box.id)
                 childNodes.append(place(
@@ -265,8 +273,8 @@ public struct TreemapLayout: Equatable, Sendable {
                     width: box.width,
                     height: box.height,
                     depth: node.depth + 1,
-                    foldedCount: childRemainder ? folded.foldedCount : 0,
-                    foldedBytes: childRemainder ? UInt64(max(0, folded.foldedBytes.rounded())) : 0,
+                    foldedCount: childRemainder ? readable.foldedCount : 0,
+                    foldedBytes: childRemainder ? UInt64(max(0, readable.foldedBytes.rounded())) : 0,
                     opening: false
                 ))
             }
@@ -283,6 +291,62 @@ public struct TreemapLayout: Equatable, Sendable {
 
     private func visibleCount() -> Int {
         nodes.reduce(0) { $0 + ($1.depth > 0 ? 1 : 0) }
+    }
+
+    /// Drop tiles whose full name cannot be drawn, and fold them into one labelled remainder.
+    /// A remainder that is itself too small to read is omitted so it does not become a blank sliver.
+    private func retainReadable(
+        store: NodeStore,
+        fold: TileFold.MinimumFold,
+        items: [Squarify.Item],
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+        parent: UInt32
+    ) -> TileFold.MinimumFold {
+        var rejected: Set<UInt32> = []
+        var current = fold
+        for _ in 0..<6 {
+            var newly: Set<UInt32> = []
+            for box in current.boxes where !TileFold.isRemainder(box.id) {
+                let name = store.name(of: box.id)
+                let bytes = store.bytes(box.id, options.metric)
+                if !labelFits(name: name, bytes: bytes, width: box.width, height: box.height, header: 0) {
+                    newly.insert(box.id)
+                }
+            }
+            let remainderFits: Bool = {
+                guard let rem = current.boxes.first(where: { TileFold.isRemainder($0.id) }), current.foldedCount > 0 else { return true }
+                let name = "\(current.foldedCount) smaller items"
+                let bytes = UInt64(max(0, current.foldedBytes.rounded()))
+                return labelFits(name: name, bytes: bytes, width: rem.width, height: rem.height, header: 0)
+            }()
+            if newly.isEmpty && remainderFits {
+                return current
+            }
+            if !remainderFits && newly.isEmpty {
+                let keptIDs = Set(current.boxes.filter { !TileFold.isRemainder($0.id) }.map(\.id))
+                let kept = items.filter { keptIDs.contains($0.id) }
+                let boxes = kept.isEmpty ? [] : Squarify.layout(items: kept, x: x, y: y, width: width, height: height, gap: options.gap)
+                return TileFold.MinimumFold(boxes: boxes, foldedCount: 0, foldedBytes: 0)
+            }
+            rejected.formUnion(newly)
+            let kept = items.filter { !rejected.contains($0.id) }
+            let seededBytes = items.filter { rejected.contains($0.id) }.reduce(0.0) { $0 + $1.weight }
+            current = TileFold.layoutMinimum(
+                items: kept,
+                x: x, y: y, width: width, height: height,
+                gap: options.gap,
+                minWidth: options.minTileWidth,
+                minHeight: options.minTileHeight,
+                parent: parent,
+                maxCount: max(1, kept.count + 1),
+                seededFoldCount: rejected.count,
+                seededFoldBytes: seededBytes
+            )
+        }
+        return current
     }
 
     private func labelFits(name: String, bytes: UInt64, width: Double, height: Double, header: Double) -> Bool {
@@ -410,7 +474,9 @@ public enum TileFold {
         minWidth: Double,
         minHeight: Double,
         parent: UInt32,
-        maxCount: Int = .max
+        maxCount: Int = .max,
+        seededFoldCount: Int = 0,
+        seededFoldBytes: Double = 0
     ) -> MinimumFold {
         guard width > 0, height > 0 else {
             return MinimumFold(boxes: [], foldedCount: 0, foldedBytes: 0)
@@ -418,9 +484,17 @@ public enum TileFold {
         let minArea = max(1, minWidth * minHeight)
         let capacity = max(1, Int(floor((width * height) / minArea)))
         var kept: [Squarify.Item] = []
-        var foldedCount = 0
-        var foldedBytes = 0.0
+        var foldedCount = seededFoldCount
+        var foldedBytes = seededFoldBytes
         let ranked = items.sorted { $0.weight > $1.weight }
+        if ranked.isEmpty {
+            guard seededFoldBytes > 0 else { return MinimumFold(boxes: [], foldedCount: 0, foldedBytes: 0) }
+            return MinimumFold(
+                boxes: [LayoutBox(id: remainderID(parent: parent), x: x, y: y, width: width, height: height)],
+                foldedCount: seededFoldCount,
+                foldedBytes: seededFoldBytes
+            )
+        }
         let limit = max(1, min(capacity, maxCount))
         if ranked.count > limit {
             let keepN = max(1, limit - 1)
@@ -646,5 +720,38 @@ public enum LayoutBench {
         let sorted = values.sorted()
         let rank = Int((Double(sorted.count - 1) * p).rounded(.up))
         return sorted[min(sorted.count - 1, max(0, rank))]
+    }
+}
+
+public enum LayoutAudit {
+    public struct Report: Equatable, Sendable {
+        public var tiles: Int
+        public var unlabeled: Int
+    }
+
+    public static func check(store: NodeStore, width: Double = 1200, height: Double = 800) -> Report {
+        let layout = TreemapLayout.build(
+            store: store,
+            rootID: store.rootID,
+            width: width,
+            height: height,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        var tiles = 0
+        var unlabeled = 0
+        for node in layout.nodes where node.depth > 0 {
+            tiles += 1
+            let fits = LabelFit.fits(
+                name: node.label,
+                sizeText: ByteFormat.bytes(node.sizeBytes),
+                tileWidth: node.width,
+                tileHeight: node.height,
+                header: 0
+            )
+            if node.label.isEmpty || !node.showsLabel || !fits {
+                unlabeled += 1
+            }
+        }
+        return Report(tiles: tiles, unlabeled: unlabeled)
     }
 }

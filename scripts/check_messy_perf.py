@@ -26,6 +26,7 @@ def main() -> None:
     assert report["layoutMs"] < 50, "layout"
     assert report["backingScale"] >= 2, "backing scale"
     assert report["hoverDrawCount"] == 0, "hover redrew tiles"
+    assert report.get("unlabeledTiles", 1) == 0, "unlabeled tiles"
 
 
 if __name__ == "__main__":

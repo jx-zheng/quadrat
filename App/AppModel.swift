@@ -291,7 +291,11 @@ final class AppModel: ObservableObject {
                 parts.append(chain)
             }
         }
-        return parts.joined(separator: " / ")
+        return BreadcrumbLine.line(from: parts)
+    }
+
+    func percentOfDisk(_ bytes: UInt64) -> String {
+        ByteFormat.percent(bytes, of: activeVolume?.capacity ?? 0)
     }
 
     func moveSelection(dx: CGFloat, dy: CGFloat) {

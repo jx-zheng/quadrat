@@ -25,27 +25,29 @@ enum VolumeMode {
         if let match = catalog.first(where: { $0.id == standardized }) {
             return Session(volume: match, scanRoot: match.scanRoot, displayRoot: match.id)
         }
+        let container = containingVolume(of: standardized, catalog: catalog)
         let name = URL(fileURLWithPath: standardized).lastPathComponent
         let folder = DiskVolume(
             id: standardized,
             name: name.isEmpty ? standardized : name,
-            detail: "Folder",
+            detail: container.map { "On \($0.name)" } ?? "Folder",
             symbol: "folder",
-            capacity: 0,
-            available: 0,
-            purgeable: 0,
-            isNetwork: false,
+            capacity: container?.capacity ?? 0,
+            available: container?.available ?? 0,
+            purgeable: container?.purgeable ?? 0,
+            isNetwork: container?.isNetwork ?? false,
             isStartup: false,
-            isRemovable: false,
+            isRemovable: container?.isRemovable ?? false,
             lastScanned: nil,
             snapshotCount: 0
         )
         return Session(volume: folder, scanRoot: standardized, displayRoot: standardized)
     }
 
-    /// Adds the unscanned gap so the map sums to the volume's used space.
+    /// Adds the unscanned gap so a volume map sums to used space. A folder keeps the
+    /// disk's capacity for percentages, but does not invent a System & Other tile.
     static func addUnscannedGap(store: inout NodeStore, volume: DiskVolume) {
-        guard volume.capacity > 0, store.rootID != 0 else { return }
+        guard !volume.detail.hasPrefix("On "), volume.capacity > 0, store.rootID != 0 else { return }
         let scanned = store.bytes(store.rootID, .allocated)
         let used = volume.used
         guard used > scanned + (1 << 20) else { return }
@@ -58,5 +60,18 @@ enum VolumeMode {
             flags: [.hatched]
         )
         store.rollup(store.rootID)
+    }
+
+    private static func containingVolume(of path: String, catalog: [DiskVolume]) -> DiskVolume? {
+        let url = URL(fileURLWithPath: path)
+        if let volumePath = try? url.resourceValues(forKeys: [.volumeURLKey]).volume?.path,
+           let match = catalog.first(where: { $0.id == volumePath }) {
+            return match
+        }
+        return catalog
+            .filter { item in
+                item.id == "/" ? path.hasPrefix("/") : path == item.id || path.hasPrefix(item.id + "/")
+            }
+            .max { $0.id.count < $1.id.count }
     }
 }
