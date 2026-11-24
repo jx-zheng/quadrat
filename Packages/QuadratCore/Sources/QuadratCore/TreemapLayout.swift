@@ -249,6 +249,7 @@ public struct TreemapLayout: Equatable, Sendable {
             guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
             let header = 18.0
             guard node.height > header + options.minTileHeight else { continue }
+            guard labelFits(name: node.label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) else { continue }
             let kids = gatherChildren(store: store, id: node.id, limit: min(8, room))
             guard !kids.items.isEmpty || kids.foldedCount > 0 else { continue }
             let folded = TileFold.layoutMinimum(
