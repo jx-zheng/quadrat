@@ -318,7 +318,7 @@ private final class PeakSampler {
         }
     }
 
-    func stop() -> UInt64 {
+    func stop() -> (footprint: UInt64, resident: UInt64) {
         running = false
         condition.lock()
         while !finished { condition.wait() }
