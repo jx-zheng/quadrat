@@ -73,6 +73,7 @@ jobs:
             --out /tmp/quadrat-perf/perf.json \
             --idle-seconds 30
           python3 -m json.tool /tmp/quadrat-perf/perf.json >/dev/null
+          python3 -c 'import json; report=json.load(open("/tmp/quadrat-perf/perf.json")); peak=report["rootScan"]["peakRSSBytes"]; limit=100*1024*1024; print(f"root peak RSS {peak} bytes (limit {limit})"); assert peak < limit, "root scan peak RSS is over 100 MB"'
           rm -rf /tmp/quadrat-synth
 
       - name: Leaks

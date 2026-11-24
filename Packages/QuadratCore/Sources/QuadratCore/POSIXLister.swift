@@ -20,13 +20,19 @@ public final class POSIXListing: DirectoryListing {
     public init() {}
 
     public func list(path: String, rootDevice: UInt64) -> ListOutcome {
+        var entries: [ListedEntry] = []
+        let outcome = enumerate(path: path, rootDevice: rootDevice) { entries.append($0) }
+        if case .entries = outcome { return .entries(entries) }
+        return outcome
+    }
+
+    public func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome {
         guard let dir = path.withCString({ opendir($0) }) else {
             if errno == EACCES || errno == EPERM { return .inaccessible }
             return .failed
         }
         defer { closedir(dir) }
 
-        var entries: [ListedEntry] = []
         while true {
             errno = 0
             guard let ent = readdir(dir) else {
@@ -40,7 +46,7 @@ public final class POSIXListing: DirectoryListing {
             let rc = child.withCString { lstat($0, &info) }
             if rc != 0 {
                 let denied = errno == EACCES || errno == EPERM
-                entries.append(ListedEntry(
+                body(ListedEntry(
                     name: name,
                     inaccessible: denied
                 ))
@@ -56,7 +62,7 @@ public final class POSIXListing: DirectoryListing {
             let fileID = UInt64(info.st_ino)
             let links = UInt32(min(UInt64(info.st_nlink), UInt64(UInt32.max)))
             let mount = isDir && rootDevice != 0 && device != rootDevice
-            entries.append(ListedEntry(
+            body(ListedEntry(
                 name: name,
                 allocBytes: alloc,
                 logicalBytes: logical,
@@ -68,7 +74,7 @@ public final class POSIXListing: DirectoryListing {
                 isMountPoint: mount
             ))
         }
-        return .entries(entries)
+        return .entries([])
     }
 
     private static func entryName(_ ent: UnsafeMutablePointer<dirent>) -> String {

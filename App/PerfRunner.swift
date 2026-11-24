@@ -22,21 +22,23 @@ enum PerfRunner {
             ]
         ]
 
-        var benchStore: NodeStore?
+        // `/` is measured first, then its store is dropped, so the peak is the
+        // scan itself rather than pages still held from the synthetic tree.
+        if !skipRoot && directory != "/" {
+            let root = scan(path: "/", displayName: "Macintosh HD")
+            report["rootScan"] = root.json
+            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+        }
+
         if !skipSynthetic {
             let synthetic = scanSynthetic()
             report["synthetic"] = synthetic.json
-            benchStore = synthetic.store
+            malloc_zone_pressure_relief(malloc_default_zone(), 0)
         }
 
         let directoryScan = scan(path: directory, displayName: URL(fileURLWithPath: directory).lastPathComponent)
         report["directoryScan"] = directoryScan.json
-        if benchStore == nil { benchStore = directoryScan.store }
-
-        if !skipRoot && directory != "/" {
-            let root = scan(path: "/", displayName: "Macintosh HD")
-            report["rootScan"] = root.json
-        }
+        var benchStore: NodeStore? = directoryScan.store
 
         if let store = benchStore, store.rootID != 0 {
             let frames = RenderBench.measure(store: store)
@@ -49,6 +51,7 @@ enum PerfRunner {
             ]
         }
         benchStore = nil
+        malloc_zone_pressure_relief(malloc_default_zone(), 0)
 
         if idleSeconds > 0 {
             report["idle"] = measureIdle(seconds: idleSeconds)

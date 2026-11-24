@@ -52,6 +52,20 @@ public enum ListOutcome: Equatable, Sendable {
 
 public protocol DirectoryListing: AnyObject {
     func list(path: String, rootDevice: UInt64) -> ListOutcome
+    /// Yields entries without retaining the whole directory. Default builds the array from `list`.
+    func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome
+}
+
+extension DirectoryListing {
+    public func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome {
+        let outcome = list(path: path, rootDevice: rootDevice)
+        if case .entries(let entries) = outcome {
+            for entry in entries {
+                body(entry)
+            }
+        }
+        return outcome
+    }
 }
 
 /// In-memory listing used by tests and the synthetic perf tree.

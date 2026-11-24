@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 final class HardLinkSet {
     private let locks: [NSLock]
@@ -58,6 +61,7 @@ public final class ScanEngine {
     public private(set) var usedBulkLister = false
 
     private let lock = NSLock()
+    private var completions = 0
     private var cancelled = false
     private var items = 0
     private var directories = 0
@@ -181,11 +185,115 @@ public final class ScanEngine {
             return
         }
 
-        let outcome = list(path)
-        let entries: [ListedEntry]
+        var subdirs: [(UInt32, String)] = []
+        lock.lock()
+        let depth = store.depth(of: node)
+        let parentKind = store.kind(node)
+        lock.unlock()
+        let keepCount = Folding.largestKept(depth: depth)
+        var keptSmall: [(entry: ListedEntry, duplicate: Bool)] = []
+        var largeFiles: [(entry: ListedEntry, duplicate: Bool)] = []
+        var foldedAlloc: UInt64 = 0
+        var foldedLogical: UInt64 = 0
+        var foldedCount = 0
+        var foldedShare = false
+
+        func fold(_ entry: ListedEntry, duplicate: Bool) {
+            if !duplicate {
+                foldedAlloc &+= entry.allocBytes
+                foldedLogical &+= entry.logicalBytes
+                if entry.mayShareBlocks { foldedShare = true }
+            }
+            foldedCount += 1
+        }
+
+        var seen = 0
+        let outcome = enumerate(path) { entry in
+            if entry.name == "." || entry.name == ".." || entry.name.isEmpty { return }
+            seen += 1
+            let childPath = self.join(path, entry.name)
+            if self.skip?(childPath) == true {
+                self.lock.lock()
+                self.inaccessible += 1
+                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
+                _ = self.store.addNode(
+                    parent: node,
+                    name: entry.name,
+                    allocBytes: 0,
+                    logicalBytes: 0,
+                    kind: kind,
+                    flags: [.directory, .inaccessible, .lowerBound]
+                )
+                self.lock.unlock()
+                return
+            }
+            if entry.inaccessible {
+                self.lock.lock()
+                self.inaccessible += 1
+                let flags: NodeFlags = entry.isDirectory
+                    ? [.directory, .inaccessible, .lowerBound]
+                    : [.inaccessible, .lowerBound]
+                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: entry.isDirectory)
+                _ = self.store.addNode(
+                    parent: node,
+                    name: entry.name,
+                    allocBytes: 0,
+                    logicalBytes: 0,
+                    kind: kind,
+                    flags: flags
+                )
+                self.store.insertFlags(.lowerBound, on: node)
+                self.lock.unlock()
+                return
+            }
+
+            let descend = entry.isDirectory && !entry.isSymlink && !entry.isMountPoint
+            if descend {
+                self.lock.lock()
+                self.directories += 1
+                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
+                let child = self.store.addNode(
+                    parent: node,
+                    name: entry.name,
+                    allocBytes: 0,
+                    logicalBytes: 0,
+                    kind: kind,
+                    flags: .directory
+                )
+                self.lock.unlock()
+                subdirs.append((child, childPath))
+                return
+            }
+
+            let duplicate = entry.linkCount > 1 && !self.links.insertFirst(device: entry.device, file: entry.fileID)
+            if entry.allocBytes >= Folding.minimumKeepBytes {
+                largeFiles.append((entry, duplicate))
+                return
+            }
+            if keptSmall.count < keepCount {
+                keptSmall.append((entry, duplicate))
+                return
+            }
+            var smallest = 0
+            for index in 1..<keptSmall.count where keptSmall[index].entry.allocBytes < keptSmall[smallest].entry.allocBytes {
+                smallest = index
+            }
+            if entry.allocBytes > keptSmall[smallest].entry.allocBytes {
+                let dropped = keptSmall[smallest]
+                fold(dropped.entry, duplicate: dropped.duplicate)
+                keptSmall[smallest] = (entry, duplicate)
+            } else {
+                fold(entry, duplicate: duplicate)
+            }
+        }
+
+        lock.lock()
+        items += seen
+        lock.unlock()
+
         switch outcome {
-        case .entries(let listed):
-            entries = listed
+        case .entries:
+            break
         case .inaccessible:
             lock.lock()
             inaccessible += 1
@@ -194,13 +302,6 @@ public final class ScanEngine {
             complete(node)
             return
         case .unsupported, .failed:
-            if let fallback, !(lister is POSIXListing) {
-                let second = fallback.list(path: path, rootDevice: rootDevice)
-                if case .entries(let listed) = second {
-                    entries = listed
-                    break
-                }
-            }
             lock.lock()
             inaccessible += 1
             store.insertFlags([.inaccessible, .lowerBound], on: node)
@@ -209,117 +310,42 @@ public final class ScanEngine {
             return
         }
 
-        var subdirs: [(UInt32, String)] = []
-        var files: [(key: String, entry: ListedEntry)] = []
-
-        lock.lock()
-        items += entries.count
-        let parentKind = store.kind(node)
-        lock.unlock()
-
-        for entry in entries {
-            if entry.name == "." || entry.name == ".." || entry.name.isEmpty { continue }
-            let childPath = join(path, entry.name)
-            if skip?(childPath) == true {
-                lock.lock()
-                inaccessible += 1
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
-                _ = store.addNode(
-                    parent: node,
-                    name: entry.name,
-                    allocBytes: 0,
-                    logicalBytes: 0,
-                    kind: kind,
-                    flags: [.directory, .inaccessible, .lowerBound]
-                )
-                lock.unlock()
-                continue
+        let smallKeep = max(0, keepCount - largeFiles.count)
+        if smallKeep == 0 {
+            for item in keptSmall {
+                fold(item.entry, duplicate: item.duplicate)
             }
-            if entry.inaccessible {
-                lock.lock()
-                inaccessible += 1
-                let flags: NodeFlags = entry.isDirectory
-                    ? [.directory, .inaccessible, .lowerBound]
-                    : [.inaccessible, .lowerBound]
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: entry.isDirectory)
-                _ = store.addNode(
-                    parent: node,
-                    name: entry.name,
-                    allocBytes: 0,
-                    logicalBytes: 0,
-                    kind: kind,
-                    flags: flags
-                )
-                store.insertFlags(.lowerBound, on: node)
-                lock.unlock()
-                continue
+            keptSmall.removeAll()
+        } else if keptSmall.count > smallKeep {
+            keptSmall.sort { $0.entry.allocBytes > $1.entry.allocBytes }
+            for item in keptSmall[smallKeep...] {
+                fold(item.entry, duplicate: item.duplicate)
             }
-
-            let descend = entry.isDirectory && !entry.isSymlink && !entry.isMountPoint
-            if descend {
-                lock.lock()
-                directories += 1
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
-                let child = store.addNode(
-                    parent: node,
-                    name: entry.name,
-                    allocBytes: 0,
-                    logicalBytes: 0,
-                    kind: kind,
-                    flags: .directory
-                )
-                lock.unlock()
-                subdirs.append((child, childPath))
-            } else {
-                files.append((entry.name, entry))
-            }
+            keptSmall.removeSubrange(smallKeep...)
         }
 
         lock.lock()
-        let depth = store.depth(of: node)
-        lock.unlock()
-        let decision = Folding.partition(
-            files.map { Folding.FileChoice(key: $0.key, bytes: $0.entry.allocBytes) },
-            keepCount: Folding.largestKept(depth: depth)
-        )
-        let keep = Set(decision.keep)
-        var foldedAlloc: UInt64 = 0
-        var foldedLogical: UInt64 = 0
-        var foldedCount = 0
-        var foldedShare = false
-
-        lock.lock()
-        for file in files {
-            let entry = file.entry
+        for item in largeFiles + keptSmall {
+            let entry = item.entry
             let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: false)
-            let duplicate = entry.linkCount > 1 && !links.insertFirst(device: entry.device, file: entry.fileID)
-            if keep.contains(file.key) {
-                var flags: NodeFlags = []
-                if entry.isSymlink { flags.insert(.symlink) }
-                if entry.isMountPoint { flags.insert(.mountPoint) }
-                if entry.mayShareBlocks { flags.insert(.mayShareBlocks) }
-                if duplicate { flags.insert(.hardLinkDuplicate) }
-                let alloc = duplicate ? 0 : entry.allocBytes
-                let logical = duplicate ? 0 : entry.logicalBytes
-                let id = store.addNode(
-                    parent: node,
-                    name: entry.name,
-                    allocBytes: alloc,
-                    logicalBytes: logical,
-                    kind: kind,
-                    flags: flags,
-                    privateSize: entry.mayShareBlocks ? entry.privateBytes : nil
-                )
-                if entry.isMountPoint {
-                    store.insertFlags(.mountPoint, on: id)
-                }
-            } else if !duplicate {
-                foldedAlloc &+= entry.allocBytes
-                foldedLogical &+= entry.logicalBytes
-                foldedCount += 1
-                if entry.mayShareBlocks { foldedShare = true }
-            } else {
-                foldedCount += 1
+            var flags: NodeFlags = []
+            if entry.isSymlink { flags.insert(.symlink) }
+            if entry.isMountPoint { flags.insert(.mountPoint) }
+            if entry.mayShareBlocks { flags.insert(.mayShareBlocks) }
+            if item.duplicate { flags.insert(.hardLinkDuplicate) }
+            let alloc = item.duplicate ? 0 : entry.allocBytes
+            let logical = item.duplicate ? 0 : entry.logicalBytes
+            let id = store.addNode(
+                parent: node,
+                name: entry.name,
+                allocBytes: alloc,
+                logicalBytes: logical,
+                kind: kind,
+                flags: flags,
+                privateSize: entry.mayShareBlocks ? entry.privateBytes : nil
+            )
+            if entry.isMountPoint {
+                store.insertFlags(.mountPoint, on: id)
             }
         }
         if foldedCount > 0 {
@@ -359,11 +385,11 @@ public final class ScanEngine {
         }
     }
 
-    private func list(_ path: String) -> ListOutcome {
+    private func enumerate(_ path: String, _ body: (ListedEntry) -> Void) -> ListOutcome {
         guard let lister else { return .failed }
-        let outcome = lister.list(path: path, rootDevice: rootDevice)
+        let outcome = lister.enumerate(path: path, rootDevice: rootDevice, body)
         if case .unsupported = outcome, let fallback {
-            return fallback.list(path: path, rootDevice: rootDevice)
+            return fallback.enumerate(path: path, rootDevice: rootDevice, body)
         }
         if lister is BulkListing, case .entries = outcome {
             lock.lock()
@@ -392,9 +418,23 @@ public final class ScanEngine {
             parentDone = left <= 0
         }
         lock.unlock()
+        reclaimIfNeeded()
         if parentDone {
             complete(parent)
         }
+    }
+
+    /// Return freed scanner pages so the resident set tracks the live tree.
+    private func reclaimIfNeeded() {
+        #if os(macOS)
+        lock.lock()
+        completions += 1
+        let due = (completions & 127) == 0
+        lock.unlock()
+        if due {
+            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+        }
+        #endif
     }
 
     private func join(_ parent: String, _ name: String) -> String {

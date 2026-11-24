@@ -9,6 +9,15 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     public init() {}
 
     public func list(path: String, rootDevice: UInt64) -> ListOutcome {
+        var entries: [ListedEntry] = []
+        let outcome = enumerate(path: path, rootDevice: rootDevice) { entries.append($0) }
+        if case .entries = outcome {
+            return .entries(entries)
+        }
+        return outcome
+    }
+
+    public func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome {
         let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
         if fd < 0 {
             if errno == EACCES || errno == EPERM { return .inaccessible }
@@ -36,7 +45,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         // Match the getattrlistbulk(2) sample: options 0. O_NOFOLLOW on the directory fd
         // already stops the walk from following the directory itself.
         let options: UInt64 = 0
-        var entries: [ListedEntry] = []
+        var yielded = 0
 
         while true {
             let count: Int32 = buffer.withUnsafeMutableBytes { raw in
@@ -49,14 +58,15 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
                 if errno == EACCES || errno == EPERM { return .inaccessible }
                 return .failed
             }
-            if !Self.parse(buffer: buffer, count: Int(count), rootDevice: rootDevice, into: &entries) {
-                return .unsupported
+            if !Self.parse(buffer: buffer, count: Int(count), rootDevice: rootDevice, body: body) {
+                return yielded == 0 ? .unsupported : .entries([])
             }
+            yielded += count
         }
         // A non-empty directory that comes back with nothing means the bulk call
         // did not iterate. Callers fall back to the POSIX lister.
-        if entries.isEmpty || Self.looksCorrupt(entries) { return .unsupported }
-        return .entries(entries)
+        if yielded == 0 { return .unsupported }
+        return .entries([])
     }
 
     /// Targeted probe for APFS clones. Failures are ignored; tiles keep allocated size.
@@ -90,7 +100,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         return (shares, privateSize)
     }
 
-    private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, into entries: inout [ListedEntry]) -> Bool {
+    private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, body: (ListedEntry) -> Void) -> Bool {
         var cursor = 0
         let errorBit = group(ATTR_CMN_ERROR)
         let nameBit = group(ATTR_CMN_NAME)
@@ -154,7 +164,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
                 let point = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
                 let mount = isDir && ((mountStatus & point) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
                 let denied = error == UInt32(EACCES) || error == UInt32(EPERM)
-                entries.append(ListedEntry(
+                body(ListedEntry(
                     name: name,
                     allocBytes: allocSize,
                     logicalBytes: totalSize,
@@ -175,14 +185,6 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     /// Darwin imports some `ATTR_*` constants as `Int32` and others as `UInt32`.
     private static func group<T: BinaryInteger>(_ value: T) -> attrgroup_t {
         attrgroup_t(truncatingIfNeeded: value)
-    }
-
-    private static func looksCorrupt(_ entries: [ListedEntry]) -> Bool {
-        guard !entries.isEmpty else { return false }
-        let blank = entries.reduce(0) { $0 + ($1.name.isEmpty ? 1 : 0) }
-        if blank * 2 > entries.count { return true }
-        let absurd = entries.contains { $0.logicalBytes > (1 << 50) || $0.allocBytes > (1 << 50) }
-        return absurd
     }
 
     private static func readU32(_ buffer: [UInt8], _ offset: Int) -> UInt32 {
