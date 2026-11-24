@@ -255,40 +255,31 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             let dir = readU32(base, field + 8)
             let file = readU32(base, field + 12)
             field += 20
-            func take32() -> UInt32 {
-                let value = field + 4 <= record + recordLength ? readU32(base, field) : 0
-                field += 4
-                return value
-            }
-            func take64() -> UInt64 {
-                let value = field + 8 <= record + recordLength ? readU64(base, field) : 0
-                field += 8
-                return value
-            }
-            let error = (common & errorBit) != 0 ? take32() : 0
+            let end = record + recordLength
+            let error = (common & errorBit) != 0 ? take32(base, &field, end) : 0
             var nameStart = 0
             var nameCount = 0
-            if (common & nameBit) != 0, field + 8 <= record + recordLength {
+            if (common & nameBit) != 0, field + 8 <= end {
                 let nameRef = field
                 let nameDelta = Int(readI32(base, field))
                 let nameLength = Int(readU32(base, field + 4))
                 field += 8
                 let start = nameRef + nameDelta
-                if start >= record, start + max(0, nameLength) <= record + recordLength, nameLength > 0 {
+                if start >= record, start + max(0, nameLength) <= end, nameLength > 0 {
                     nameStart = start
                     var trimmed = nameLength
                     while trimmed > 0 && base[start + trimmed - 1] == 0 { trimmed -= 1 }
                     nameCount = trimmed
                 }
             }
-            let devid = (common & devBit) != 0 ? take32() : 0
-            let objType = (common & typeBit) != 0 ? take32() : 0
-            if (common & flagsBit) != 0 { _ = take32() }
-            let fileID = (common & fileBit) != 0 ? take64() : 0
-            let mountStatus = (dir & mountBit) != 0 ? take32() : 0
-            let linkCount = (file & linkBit) != 0 ? take32() : 1
-            let totalSize = (file & totalBit) != 0 ? take64() : 0
-            let allocSize = (file & allocBit) != 0 ? take64() : 0
+            let devid = (common & devBit) != 0 ? take32(base, &field, end) : 0
+            let objType = (common & typeBit) != 0 ? take32(base, &field, end) : 0
+            if (common & flagsBit) != 0 { _ = take32(base, &field, end) }
+            let fileID = (common & fileBit) != 0 ? take64(base, &field, end) : 0
+            let mountStatus = (dir & mountBit) != 0 ? take32(base, &field, end) : 0
+            let linkCount = (file & linkBit) != 0 ? take32(base, &field, end) : 1
+            let totalSize = (file & totalBit) != 0 ? take64(base, &field, end) : 0
+            let allocSize = (file & allocBit) != 0 ? take64(base, &field, end) : 0
             if nameCount == 0 || (nameCount == 1 && base[nameStart] == 46) || (nameCount == 2 && base[nameStart] == 46 && base[nameStart + 1] == 46) {
                 cursor += recordLength
                 continue
@@ -428,6 +419,21 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         attrgroup_t(truncatingIfNeeded: value)
     }
 
+    @inline(__always)
+    private static func take32(_ base: UnsafePointer<UInt8>, _ field: inout Int, _ end: Int) -> UInt32 {
+        let value = field + 4 <= end ? readU32(base, field) : 0
+        field += 4
+        return value
+    }
+
+    @inline(__always)
+    private static func take64(_ base: UnsafePointer<UInt8>, _ field: inout Int, _ end: Int) -> UInt64 {
+        let value = field + 8 <= end ? readU64(base, field) : 0
+        field += 8
+        return value
+    }
+
+    @inline(__always)
     private static func readU32(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt32 {
         UnsafeRawPointer(base + offset).loadUnaligned(as: UInt32.self)
     }
