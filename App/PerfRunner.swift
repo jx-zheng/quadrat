@@ -343,7 +343,7 @@ private final class TreemapRenderView: NSView {
     var tiles: [TileDraw] = [] {
         didSet { cache = nil }
     }
-    private var cache: NSImage?
+    private var cache: CGImage?
     private var hoverRect: NSRect?
 
     override var isFlipped: Bool { true }
@@ -358,35 +358,50 @@ private final class TreemapRenderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         if cache == nil { cache = makeCache() }
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
         if let cache {
-            cache.draw(in: dirtyRect, from: dirtyRect, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+            context.saveGState()
+            context.clip(to: dirtyRect)
+            context.translateBy(x: 0, y: bounds.height)
+            context.scaleBy(x: 1, y: -1)
+            context.draw(cache, in: CGRect(origin: .zero, size: bounds.size))
+            context.restoreGState()
         } else {
             NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
             dirtyRect.fill()
         }
         if let hoverRect, hoverRect.intersects(dirtyRect) {
             NSColor.black.setStroke()
-            let path = NSBezierPath(roundedRect: hoverRect, xRadius: 2, yRadius: 2)
+            let path = NSBezierPath(rect: hoverRect)
             path.lineWidth = 2
             path.stroke()
         }
     }
 
-    private func makeCache() -> NSImage? {
-        let size = bounds.size
-        guard size.width > 1, size.height > 1 else { return nil }
-        return NSImage(size: size, flipped: true) { [tiles] _ in
-            NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
-            NSRect(origin: .zero, size: size).fill()
-            let color = NSColor(calibratedRed: 0.16, green: 0.45, blue: 0.85, alpha: 1)
-            color.setFill()
-            for tile in tiles {
-                let tileRect = NSRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
-                guard tileRect.width >= 1, tileRect.height >= 1 else { continue }
-                NSBezierPath(roundedRect: tileRect, xRadius: 3, yRadius: 3).fill()
-            }
-            return true
+    private func makeCache() -> CGImage? {
+        let width = Int(bounds.width.rounded(.up))
+        let height = Int(bounds.height.rounded(.up))
+        guard width > 1, height > 1,
+              let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.setFillColor(CGColor(gray: 0.96, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.setFillColor(CGColor(red: 0.16, green: 0.45, blue: 0.85, alpha: 1))
+        for tile in tiles {
+            let rect = CGRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
+            guard rect.width >= 1, rect.height >= 1 else { continue }
+            context.fill(rect)
         }
+        return context.makeImage()
     }
 }
 

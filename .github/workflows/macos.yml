@@ -110,7 +110,7 @@ jobs:
             --snapshot-path /tmp/quadrat-messy \
             --snapshot-out /tmp/quadrat-messy/messy-dark.png \
             --snapshot-scheme dark
-          rm -rf /tmp/quadrat-messy/Users /tmp/quadrat-messy/Applications
+          find /tmp/quadrat-messy -mindepth 1 -maxdepth 1 ! -name perf.json ! -name 'messy-*.png' -exec rm -rf {} +
 
       - name: Upload snapshots and perf
         uses: actions/upload-artifact@v4

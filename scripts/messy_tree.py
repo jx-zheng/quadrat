@@ -48,17 +48,18 @@ def main() -> None:
     attachments = directory(os.path.join(messages, "Attachments"))
     for index in range(256):
         bucket = directory(os.path.join(attachments, f"{index:02x}"))
-        file(os.path.join(bucket, "attachment.jpg"), chunks=1)
+        # A real payload keeps the folder after scan folding. Four tiny names sit beside it.
+        file(os.path.join(bucket, "attachment.jpg"), chunks=1 if index < 48 else 0)
         for extra in range(4):
             file(os.path.join(bucket, f"{extra:02d}.plist"))
 
     photos = directory(os.path.join(library, "Photos Library.photoslibrary"))
     originals = directory(os.path.join(photos, "originals"))
     derivatives = directory(os.path.join(photos, "resources", "derivatives"))
-    for index in range(160):
-        file(os.path.join(originals, f"IMG_{index:04d}.heic"), chunks=1)
     for index in range(80):
-        file(os.path.join(derivatives, f"thumb_{index:04d}.jpg"), chunks=1)
+        file(os.path.join(originals, f"IMG_{index:04d}.heic"), chunks=1 if index < 24 else 0)
+    for index in range(40):
+        file(os.path.join(derivatives, f"thumb_{index:04d}.jpg"), chunks=1 if index < 12 else 0)
 
     support = directory(os.path.join(library, "Application Support"))
     cursor = support
@@ -77,7 +78,7 @@ def main() -> None:
         "ff",
     ):
         cursor = directory(os.path.join(cursor, name))
-    file(os.path.join(cursor, "blob.bin"), chunks=48)
+    file(os.path.join(cursor, "blob.bin"), chunks=8)
     file(os.path.join(cursor, "notes.txt"))
 
     developer = directory(os.path.join(library, "Developer"))
@@ -103,7 +104,7 @@ def main() -> None:
         framework = directory(os.path.join(frameworks, f"Framework{index}.framework"))
         versions = directory(os.path.join(framework, "Versions"))
         current = directory(os.path.join(versions, "A"))
-        file(os.path.join(current, "Framework"), chunks=1 if index < 36 else 0)
+        file(os.path.join(current, "Framework"), chunks=1 if index < 12 else 0)
         bundled = directory(os.path.join(current, "Resources"))
         for child in range(3):
             file(os.path.join(bundled, f"asset{child}.car"))
@@ -115,23 +116,21 @@ def main() -> None:
     for index in range(12):
         file(os.path.join(utility, f"view{index}.nib"))
 
-    file(os.path.join(root, "Archive.dmg"), chunks=32)
-    file(os.path.join(root, "Machine.sparseimage"), chunks=16)
+    file(os.path.join(root, "Archive.dmg"), chunks=4)
+    file(os.path.join(root, "Machine.sparseimage"), chunks=2)
 
-    bulk_root = directory(os.path.join(library, "Caches", "com.apple.bulk"))
-    per_dir = 200
+    # The million count uses the same flat shape as the fast scan fixture.
+    # The home-folder tree above is what makes the picture messy.
+    bulk_root = directory(os.path.join(root, "bulk"))
+    per_dir = 300
     folder_index = 0
     while items < TARGET:
-        parent = os.path.join(bulk_root, f"{folder_index // 256:02x}")
-        if not os.path.isdir(parent):
-            os.makedirs(parent, exist_ok=True)
-            items += 1
-        folder = os.path.join(parent, f"{folder_index % 256:02x}")
+        folder = os.path.join(bulk_root, f"d{folder_index}")
         os.makedirs(folder, exist_ok=True)
         items += 1
         batch = min(per_dir, TARGET - items)
         for index in range(batch):
-            fd = os.open(os.path.join(folder, f"{index}.dat"), os.O_CREAT | os.O_WRONLY, 0o644)
+            fd = os.open(os.path.join(folder, f"f{index}"), os.O_CREAT | os.O_WRONLY, 0o644)
             os.close(fd)
             items += 1
         folder_index += 1
