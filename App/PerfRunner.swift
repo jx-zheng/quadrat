@@ -98,7 +98,7 @@ enum PerfRunner {
     }
 
     private static func scan(path: String, displayName: String) -> Phase {
-        let engine = ScanEngine()
+        let engine = ScanEngine(workerCount: 2)
         let sampler = PeakSampler()
         sampler.start()
         let started = Date()
@@ -125,10 +125,17 @@ enum PerfRunner {
             "peakRSSBytes": Int(peak),
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
+            "heapInUseBytes": heapInUse(),
             "hardLinks": engine.hardLinkCount,
             "inaccessible": stats.inaccessible,
             "usedBulkLister": stats.usedBulkLister
         ], store: store)
+    }
+
+    private static func heapInUse() -> Int {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(malloc_default_zone(), &stats)
+        return Int(stats.size_in_use)
     }
 
     private static func measureIdle(seconds: Double) -> [String: Any] {
@@ -292,6 +299,8 @@ private final class PeakSampler {
         Thread.detachNewThread { [weak self] in
             guard let self else { return }
             while self.running {
+                // Drop malloc caches first so the sample is memory still in use.
+                _ = malloc_zone_pressure_relief(nil, Int.max)
                 let sample = ResidentMemory.currentBytes()
                 if sample > self.peak { self.peak = sample }
                 Thread.sleep(forTimeInterval: 0.05)
