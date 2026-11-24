@@ -445,9 +445,17 @@ public final class ScanEngine {
         }
     }
 
+    @inline(__always)
     private func enumerate(_ path: String, _ body: (StreamedRecord) -> Void) -> ListOutcome {
         guard let lister else { return .failed }
-        let outcome = lister.enumerateStream(path: path, rootDevice: rootDevice, body)
+        // A concrete call lets the compiler inline the per-file body. Going through
+        // the protocol witness was most of the time in a million-file directory.
+        let outcome: ListOutcome
+        if let bulk = lister as? BulkDirectoryListing {
+            outcome = bulk.enumerateStream(path: path, rootDevice: rootDevice, body)
+        } else {
+            outcome = lister.enumerateStream(path: path, rootDevice: rootDevice, body)
+        }
         if case .unsupported = outcome, let fallback {
             return fallback.enumerateStream(path: path, rootDevice: rootDevice, body)
         }

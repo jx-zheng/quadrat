@@ -21,6 +21,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         enumerateStream(path: path, rootDevice: rootDevice) { body($0.materialized()) }
     }
 
+    @inline(__always)
     public func enumerateStream(path: String, rootDevice: UInt64, _ body: (StreamedRecord) -> Void) -> ListOutcome {
         let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
         if fd < 0 {
@@ -104,6 +105,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         return (shares, privateSize)
     }
 
+    @inline(__always)
     private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, body: (StreamedRecord) -> Void) -> Bool {
         buffer.withUnsafeBufferPointer { raw in
             guard let base = raw.baseAddress else { return false }

@@ -22,25 +22,8 @@ enum PerfRunner {
             ]
         ]
 
-        // Time the on-disk tree before `/`. A two-minute whole-disk walk
-        // leaves the machine slower, and that was pulling items/s down.
-        // The store is released before the root scan so it does not sit in that peak.
-        do {
-            let directoryScan = scan(path: directory, displayName: URL(fileURLWithPath: directory).lastPathComponent)
-            report["directoryScan"] = directoryScan.json
-            if directoryScan.store.rootID != 0 {
-                let frames = RenderBench.measure(store: directoryScan.store)
-                report["frames"] = [
-                    "hoverP99Ms": frames.hoverP99Ms,
-                    "zoomP99Ms": frames.zoomP99Ms,
-                    "hoverSamples": frames.hoverSamples,
-                    "zoomSamples": frames.zoomSamples,
-                    "method": "NSView.display + CATransaction.flush"
-                ]
-            }
-        }
-        ResidentMemory.relieve()
-
+        // `/` is measured first, then its store is dropped, so the peak is the
+        // scan itself rather than pages still held from the synthetic tree.
         if !skipRoot && directory != "/" {
             let root = scan(path: "/", displayName: "Macintosh HD")
             report["rootScan"] = root.json
@@ -51,6 +34,19 @@ enum PerfRunner {
             let synthetic = scanSynthetic()
             report["synthetic"] = synthetic.json
             ResidentMemory.relieve()
+        }
+
+        let directoryScan = scan(path: directory, displayName: URL(fileURLWithPath: directory).lastPathComponent)
+        report["directoryScan"] = directoryScan.json
+        if directoryScan.store.rootID != 0 {
+            let frames = RenderBench.measure(store: directoryScan.store)
+            report["frames"] = [
+                "hoverP99Ms": frames.hoverP99Ms,
+                "zoomP99Ms": frames.zoomP99Ms,
+                "hoverSamples": frames.hoverSamples,
+                "zoomSamples": frames.zoomSamples,
+                "method": "NSView.display + CATransaction.flush"
+            ]
         }
 
         if idleSeconds > 0 {
