@@ -33,7 +33,9 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             | Self.group(ATTR_FILE_ALLOCSIZE)
 
         var buffer = [UInt8](repeating: 0, count: 256 * 1024)
-        let options = UInt64(truncatingIfNeeded: FSOPT_NOFOLLOW) | UInt64(truncatingIfNeeded: FSOPT_PACK_INVAL_ATTRS)
+        // Match the getattrlistbulk(2) sample: options 0. O_NOFOLLOW on the directory fd
+        // already stops the walk from following the directory itself.
+        let options: UInt64 = 0
         var entries: [ListedEntry] = []
 
         while true {
@@ -43,7 +45,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             }
             if count == 0 { break }
             if count < 0 {
-                if errno == ENOTSUP || errno == ENOTTY { return .unsupported }
+                if errno == ENOTSUP || errno == ENOTTY || errno == EINVAL { return .unsupported }
                 if errno == EACCES || errno == EPERM { return .inaccessible }
                 return .failed
             }
@@ -51,7 +53,9 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
                 return .unsupported
             }
         }
-        if Self.looksCorrupt(entries) { return .unsupported }
+        // A non-empty directory that comes back with nothing means the bulk call
+        // did not iterate. Callers fall back to the POSIX lister.
+        if entries.isEmpty || Self.looksCorrupt(entries) { return .unsupported }
         return .entries(entries)
     }
 
@@ -88,56 +92,67 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
 
     private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, into entries: inout [ListedEntry]) -> Bool {
         var cursor = 0
+        let errorBit = group(ATTR_CMN_ERROR)
+        let nameBit = group(ATTR_CMN_NAME)
+        let devBit = group(ATTR_CMN_DEVID)
+        let typeBit = group(ATTR_CMN_OBJTYPE)
+        let flagsBit = group(ATTR_CMN_FLAGS)
+        let fileBit = group(ATTR_CMN_FILEID)
+        let mountBit = group(ATTR_DIR_MOUNTSTATUS)
+        let linkBit = group(ATTR_FILE_LINKCOUNT)
+        let totalBit = group(ATTR_FILE_TOTALSIZE)
+        let allocBit = group(ATTR_FILE_ALLOCSIZE)
         for _ in 0..<count {
             if cursor + 4 > buffer.count { return false }
             let length = Int(readU32(buffer, cursor))
-            if length < 4 || cursor + length > buffer.count { return false }
+            if length < 24 || cursor + length > buffer.count { return false }
             let record = cursor
             var field = cursor + 4
-            // ATTR_CMN_RETURNED_ATTRS is always first: attribute_set_t is 5 × UInt32.
-            guard field + 20 <= record + length else { return false }
+            // attribute_set_t is five attrgroup_t values. ATTR_CMN_ERROR, when present,
+            // is packed immediately after it, ahead of the other common attributes.
+            let common = readU32(buffer, field)
+            let dir = readU32(buffer, field + 8)
+            let file = readU32(buffer, field + 12)
             field += 20
-            guard field + 8 <= record + length else { return false }
-            let nameRef = field
-            let nameDelta = Int(readI32(buffer, field))
-            let nameLength = Int(readU32(buffer, field + 4))
-            field += 8
-            let nameStart = nameRef + nameDelta
-            let nameEnd = nameStart + nameLength
-            let name: String
-            if nameStart >= 0, nameEnd <= buffer.count, nameLength > 0 {
-                let slice = buffer[nameStart..<nameEnd]
-                let trimmed = slice[slice.startIndex..<slice.endIndex].prefix { $0 != 0 }
-                name = String(decoding: trimmed, as: UTF8.self)
-            } else {
-                name = ""
-            }
             func take32() -> UInt32 {
-                let value = field + 4 <= buffer.count ? readU32(buffer, field) : 0
+                let value = field + 4 <= record + length ? readU32(buffer, field) : 0
                 field += 4
                 return value
             }
             func take64() -> UInt64 {
-                let value = field + 8 <= buffer.count ? readU64(buffer, field) : 0
+                let value = field + 8 <= record + length ? readU64(buffer, field) : 0
                 field += 8
                 return value
             }
-            let devid = take32()
-            let objType = take32()
-            _ = take32() // ATTR_CMN_FLAGS
-            let fileID = take64()
-            let error = take32()
-            let mountStatus = take32()
-            let linkCount = take32()
-            let totalSize = take64()
-            let allocSize = take64()
-
+            let error = (common & errorBit) != 0 ? take32() : 0
+            var name = ""
+            if (common & nameBit) != 0, field + 8 <= record + length {
+                let nameRef = field
+                let nameDelta = Int(readI32(buffer, field))
+                let nameLength = Int(readU32(buffer, field + 4))
+                field += 8
+                let nameStart = nameRef + nameDelta
+                let nameEnd = nameStart + max(0, nameLength)
+                if nameStart >= record, nameEnd <= record + length, nameLength > 0 {
+                    let slice = buffer[nameStart..<nameEnd]
+                    let trimmed = slice.prefix { $0 != 0 }
+                    name = String(decoding: trimmed, as: UTF8.self)
+                }
+            }
+            let devid = (common & devBit) != 0 ? take32() : 0
+            let objType = (common & typeBit) != 0 ? take32() : 0
+            if (common & flagsBit) != 0 { _ = take32() }
+            let fileID = (common & fileBit) != 0 ? take64() : 0
+            let mountStatus = (dir & mountBit) != 0 ? take32() : 0
+            let linkCount = (file & linkBit) != 0 ? take32() : 1
+            let totalSize = (file & totalBit) != 0 ? take64() : 0
+            let allocSize = (file & allocBit) != 0 ? take64() : 0
             if name != "." && name != ".." && !name.isEmpty {
                 let isDir = objType == VDIR.rawValue
                 let isLink = objType == VLNK.rawValue
                 let device = UInt64(devid)
-                let mountBit = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
-                let mount = isDir && ((mountStatus & mountBit) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
+                let point = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
+                let mount = isDir && ((mountStatus & point) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
                 let denied = error == UInt32(EACCES) || error == UInt32(EPERM)
                 entries.append(ListedEntry(
                     name: name,
@@ -152,8 +167,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
                     inaccessible: denied
                 ))
             }
-            let aligned = (length + 7) & ~7
-            cursor += max(aligned, 8)
+            cursor += length
         }
         return true
     }

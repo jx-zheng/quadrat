@@ -47,6 +47,14 @@ enum SnapshotRunner {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             host.layoutSubtreeIfNeeded()
         }
+        if let data = renderedPNG(view) {
+            do {
+                try data.write(to: url)
+                return FileManager.default.fileExists(atPath: url.path)
+            } catch {
+                return false
+            }
+        }
         let bounds = NSRect(x: 0, y: 0, width: 1440, height: 900)
         guard let rep = host.bitmapImageRepForCachingDisplay(in: bounds) else { return false }
         host.cacheDisplay(in: bounds, to: rep)
@@ -57,6 +65,19 @@ enum SnapshotRunner {
         } catch {
             return false
         }
+    }
+
+    /// 1440×900 points at 2×, matching the approved mockups.
+    private static func renderedPNG<V: View>(_ view: V) -> Data? {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        renderer.isOpaque = true
+        renderer.proposedSize = ProposedViewSize(width: 1440, height: 900)
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else {
+            return nil
+        }
+        guard rep.pixelsWide >= 2000, rep.pixelsHigh >= 1200 else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 
     private static func base() -> AppModel {
