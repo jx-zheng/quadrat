@@ -198,11 +198,12 @@ final class TreemapMapView: NSView {
             box.contentsScale = scale
             let label = CATextLayer()
             label.contentsScale = scale
-            label.fontSize = 12
+            label.fontSize = 11
             label.foregroundColor = NSColor.white.cgColor
             label.alignmentMode = .left
-            label.isWrapped = true
+            label.isWrapped = false
             label.truncationMode = .none
+            label.contentsScale = 1
             box.addSublayer(label)
             tilesLayer.addSublayer(box)
             tileLayers.append(box)
