@@ -109,19 +109,20 @@ jobs:
           BIN="${{ steps.app.outputs.bin }}"
           MOV=/tmp/quadrat-demo/capture.mov
           OUT=/tmp/quadrat-demo/quadrat-demo.mp4
-          screencapture -v "$MOV" &
-          CAP=$!
-          sleep 1
-          "$BIN" --demo
-          sleep 1
-          kill -INT "$CAP" || true
-          wait "$CAP" || true
-          test -s "$MOV"
           if ! command -v ffmpeg >/dev/null; then
             brew install ffmpeg
           fi
+          swiftc scripts/set_display.swift -o /tmp/set_display
+          /tmp/set_display
+          # Record a fixed length so the capture stays up for the whole scripted demo.
+          screencapture -V 100 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          CAP=$!
+          sleep 2
+          "$BIN" --demo
+          wait "$CAP" || true
+          test -s "$MOV"
+          wc -c "$MOV"
           ffmpeg -y -i "$MOV" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT"
           python3 - <<'PY'
           import json, subprocess
           raw = subprocess.check_output([
@@ -134,9 +135,9 @@ jobs:
           width, height = int(stream["width"]), int(stream["height"])
           duration = float(info["format"]["duration"])
           print(f"demo {width}x{height} {stream['codec_name']} {duration:.1f}s")
-          assert stream["codec_name"] == "h264"
-          assert width >= 1280 and height >= 800
-          assert 60 <= duration <= 130
+          assert stream["codec_name"] == "h264", stream["codec_name"]
+          assert width >= 1280 and height >= 800, (width, height)
+          assert 60 <= duration <= 130, duration
           PY
 
       - name: Upload snapshots and perf

@@ -119,7 +119,7 @@ enum DemoRunner {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeMain {
-            window.setFrame(NSRect(x: 80, y: 80, width: 1440, height: 900), display: true)
+            window.setFrame(NSRect(x: 0, y: 0, width: 1440, height: 900), display: true)
             window.makeKeyAndOrderFront(nil)
         }
     }
