@@ -186,7 +186,24 @@ jobs:
           wait "$CAP" || true
           test -s "$MOV"
           wc -c "$MOV"
-          ffmpeg -y -i "$MOV" -r 60 -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          # Drop the black frames left after the window closes. The script already
+          # holds for about two seconds after Cancel.
+          BLACK_START="$(ffmpeg -i "$MOV" -vf "blackdetect=d=0.5:pic_th=0.98:pix_th=0.10" -an -f null - 2>&1 | awk -F'black_start:' '/black_start:/ {print $2}' | awk '{print $1}' | tail -n 1 || true)"
+          DURATION="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$MOV")"
+          TRIM="$DURATION"
+          if [ -n "$BLACK_START" ]; then
+            python3 - <<PY
+          start = float("$BLACK_START")
+          duration = float("$DURATION")
+          if start > 50 and duration - start < 30:
+              open("/tmp/quadrat-demo/trim.txt","w").write(f"{start + 0.4:.3f}")
+          else:
+              open("/tmp/quadrat-demo/trim.txt","w").write(f"{duration:.3f}")
+          PY
+            TRIM="$(cat /tmp/quadrat-demo/trim.txt)"
+          fi
+          echo "trim to $TRIM (black at ${BLACK_START:-none})"
+          ffmpeg -y -i "$MOV" -t "$TRIM" -r 60 -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
           python3 - <<'PY'
           import json, subprocess
           raw = subprocess.check_output([
