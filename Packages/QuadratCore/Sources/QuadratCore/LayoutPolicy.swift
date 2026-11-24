@@ -29,9 +29,10 @@ public enum ChainCollapse {
         var child = store.firstChild[Int(id)]
         var found: UInt32?
         var count = 0
-        var steps = 0
-        while child != 0, Int(child) < store.nextSibling.count, steps < store.parent.count {
-            steps += 1
+        var seen = 0
+        // A real chain has one child. Stop after a handful of siblings so a wide folder is not walked.
+        while child != 0, Int(child) < store.nextSibling.count, seen < 4 {
+            seen += 1
             let next = store.nextSibling[Int(child)]
             if !store.flags(child).contains(.trashed), store.bytes(child, metric) > 0 {
                 count += 1
@@ -40,6 +41,7 @@ public enum ChainCollapse {
             }
             child = next
         }
+        if child != 0 { return nil }
         return count == 1 ? found : nil
     }
 }

@@ -141,15 +141,27 @@ public struct TreemapLayout: Equatable, Sendable {
             return index
         }
 
-        let kids = childItems(store: store, id: leaf)
         let deepEnough = depth >= options.maxVisibleDepth
         let bigEnough = width >= options.minTileWidth && height >= options.minTileHeight
             && width >= options.minRecurseWidth && height >= options.minRecurseHeight
-        let canRecurse = !kids.isEmpty && !deepEnough && bigEnough
-        let depthCapped = store.isDirectory(leaf) && !kids.isEmpty && !canRecurse
+        let minArea = options.minTileWidth * options.minTileHeight
+        let canHoldChildren = width >= options.minTileWidth * 2
+            && height >= options.minTileHeight + options.headerHeight
+            && width * height >= minArea * 2
+        // Listing children is the expensive part of a wide folder. Skip it when this tile
+        // cannot draw another level anyway.
+        if deepEnough || !bigEnough || !canHoldChildren {
+            let hasChild = Int(leaf) < store.firstChild.count && store.firstChild[Int(leaf)] != 0
+            nodes[index].isDepthCapped = store.isDirectory(leaf) && hasChild
+            nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
+            return index
+        }
+
+        let kids = childItems(store: store, id: leaf)
+        let canRecurse = !kids.isEmpty
         let header: Double = (canRecurse && depth >= 1 && depth <= max(1, options.maxHeaderDepth) && height >= options.headerHeight + 16 && width >= 48)
             ? options.headerHeight : 0
-        nodes[index].isDepthCapped = depthCapped
+        nodes[index].isDepthCapped = false
         nodes[index].header = header
         if !canRecurse {
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: header)
