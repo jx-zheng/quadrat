@@ -218,41 +218,45 @@ enum SnapshotRunner {
     }
 
     private static func write<V: View>(_ view: V, to url: URL) -> Bool {
-        let host = NSHostingView(rootView: view)
-        let points = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        host.frame = points
-        host.wantsLayer = true
-        host.layer?.contentsScale = 2
-        // Borderless, so the window does not draw a second set of traffic lights.
-        let window = NSWindow(contentRect: points, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = host
-        window.displayIfNeeded()
-        host.layoutSubtreeIfNeeded()
-        CATransaction.flush()
-        for _ in 0..<4 {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        autoreleasepool {
+            let host = NSHostingView(rootView: view)
+            let points = NSRect(x: 0, y: 0, width: 1440, height: 900)
+            host.frame = points
+            host.wantsLayer = true
+            // Borderless, so the window does not draw a second set of traffic lights.
+            let window = NSWindow(contentRect: points, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            window.displayIfNeeded()
             host.layoutSubtreeIfNeeded()
-        }
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: 2880,
-            pixelsHigh: 1800,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ) else { return false }
-        rep.size = NSSize(width: 1440, height: 900)
-        host.cacheDisplay(in: points, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
-        do {
-            try data.write(to: url)
-            return FileManager.default.fileExists(atPath: url.path)
-        } catch {
-            return false
+            CATransaction.flush()
+            for _ in 0..<4 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                host.layoutSubtreeIfNeeded()
+            }
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 2880,
+                pixelsHigh: 1800,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            ) else { return false }
+            rep.size = NSSize(width: 1440, height: 900)
+            host.cacheDisplay(in: points, to: rep)
+            // Drop the window backing before the PNG buffer is allocated.
+            window.contentView = nil
+            window.close()
+            guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+            do {
+                try data.write(to: url)
+                return FileManager.default.fileExists(atPath: url.path)
+            } catch {
+                return false
+            }
         }
     }
 
