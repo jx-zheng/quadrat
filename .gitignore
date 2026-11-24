@@ -1,5 +1,8 @@
 .DS_Store
 /build/
-/.build/
+**/.build/
 DerivedData/
-*.xcodeproj/xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+perf.json

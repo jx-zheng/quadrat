@@ -1,0 +1,110 @@
+name: macos
+
+on:
+  push:
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "project.yml"
+      - "scripts/**"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "project.yml"
+      - "scripts/**"
+      - ".github/workflows/macos.yml"
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: build, snapshot, perf, leaks
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project Quadrat.xcodeproj \
+            -scheme Quadrat \
+            -configuration Release \
+            -derivedDataPath /tmp/quadrat-dd \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=YES \
+            build
+
+      - name: Locate app
+        id: app
+        run: |
+          APP="/tmp/quadrat-dd/Build/Products/Release/Quadrat.app"
+          test -d "$APP"
+          echo "path=$APP" >> "$GITHUB_OUTPUT"
+          echo "bin=$APP/Contents/MacOS/Quadrat" >> "$GITHUB_OUTPUT"
+
+      - name: Snapshot screens
+        run: |
+          mkdir -p /tmp/quadrat-snapshots
+          "${{ steps.app.outputs.bin }}" --snapshot /tmp/quadrat-snapshots
+          find /tmp/quadrat-snapshots -name 'screen-*.png' | sort
+
+      - name: Synthesize on-disk tree
+        run: python3 scripts/synthesize_tree.py /tmp/quadrat-synth 1500000
+
+      - name: Perf
+        run: |
+          mkdir -p /tmp/quadrat-perf
+          "${{ steps.app.outputs.bin }}" \
+            --perf /tmp/quadrat-synth \
+            --out /tmp/quadrat-perf/perf.json \
+            --idle-seconds 30
+          python3 -m json.tool /tmp/quadrat-perf/perf.json >/dev/null
+          rm -rf /tmp/quadrat-synth
+
+      - name: Leaks
+        run: |
+          APP="${{ steps.app.outputs.path }}"
+          codesign --force --deep --sign - --entitlements scripts/ci-get-task-allow.entitlements "$APP"
+          mkdir -p /tmp/quadrat-leaks-dir /tmp/quadrat-leaks
+          python3 scripts/synthesize_tree.py /tmp/quadrat-leaks-dir 3000
+          set +e
+          leaks --atExit -- "${{ steps.app.outputs.bin }}" \
+            --perf /tmp/quadrat-leaks-dir \
+            --out /tmp/quadrat-leaks/perf.json \
+            --skip-root \
+            --skip-synthetic \
+            --idle-seconds 0 > /tmp/quadrat-leaks/leaks.txt
+          status=$?
+          set -e
+          tail -n 40 /tmp/quadrat-leaks/leaks.txt
+          if grep -E "leaks for" /tmp/quadrat-leaks/leaks.txt | grep -v "0 leaks for"; then
+            echo "leaks reported allocations" >&2
+            exit 1
+          fi
+          if ! grep -q "0 leaks for" /tmp/quadrat-leaks/leaks.txt; then
+            echo "leaks did not report a clean result (exit $status)" >&2
+            exit 1
+          fi
+
+      - name: Upload snapshots and perf
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-results
+          path: |
+            /tmp/quadrat-snapshots/
+            /tmp/quadrat-perf/perf.json
+            /tmp/quadrat-leaks/leaks.txt
+          if-no-files-found: error
