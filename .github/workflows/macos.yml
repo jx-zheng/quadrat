@@ -124,7 +124,9 @@ jobs:
       - name: Volume, home, and drill snapshots
         run: |
           mkdir -p /tmp/quadrat-volume
-          "${{ steps.app.outputs.bin }}" --snapshot-suite /tmp/quadrat-volume
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" --snapshot-suite /tmp/quadrat-volume \
+            > /tmp/quadrat-volume/stdout.txt 2> /tmp/quadrat-volume/time.txt
+          python3 scripts/check_process_memory.py /tmp/quadrat-volume/time.txt
           find /tmp/quadrat-volume -name '*.png' | sort
 
       - name: Upload snapshots and perf

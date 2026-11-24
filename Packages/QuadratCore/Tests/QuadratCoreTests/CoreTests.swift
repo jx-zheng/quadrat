@@ -469,7 +469,8 @@ final class LayoutPolicyTests: XCTestCase {
             XCTAssertFalse(tile.label.contains("…"))
         }
         XCTAssertTrue(tiles.contains { $0.headerTitle.contains("Users / person / Library") || $0.label.contains("Users / person / Library") })
-        XCTAssertFalse(tiles.contains { $0.header > 0 }, "header bars belong in the top breadcrumb, not the map")
+        XCTAssertTrue(tiles.contains { $0.header > 0 && $0.childCount > 0 }, "a large folder keeps one header strip and its children")
+        XCTAssertFalse(tiles.contains { $0.header > 0 && $0.childCount == 0 })
     }
 
     func testSpatialIndexMatchesTheSmallestContainingTile() {

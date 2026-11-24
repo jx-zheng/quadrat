@@ -172,24 +172,26 @@ public struct TreemapLayout: Equatable, Sendable {
             return index
         }
 
-        let kids = childItems(store: store, id: leaf)
-        if kids.isEmpty {
+        let cap = min(room, depth == 0 ? options.maxTiles : min(8, room))
+        let kids = gatherChildren(store: store, id: leaf, limit: cap)
+        if kids.items.isEmpty && kids.foldedCount == 0 {
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
             return index
         }
 
-        let cap = min(room, depth == 0 ? options.maxTiles : min(8, room))
         let folded = TileFold.layoutMinimum(
-            items: kids,
+            items: kids.items,
             x: x, y: y, width: width, height: height,
             gap: options.gap,
             minWidth: options.minTileWidth,
             minHeight: options.minTileHeight,
             parent: leaf,
-            maxCount: cap
+            maxCount: cap,
+            seededFoldCount: kids.foldedCount,
+            seededFoldBytes: kids.foldedBytes
         )
         let readable = retainReadable(
-            store: store, fold: folded, items: kids,
+            store: store, fold: folded, items: kids.items,
             x: x, y: y, width: width, height: height, parent: leaf
         )
         var childNodes: [Int] = []
@@ -245,20 +247,24 @@ public struct TreemapLayout: Equatable, Sendable {
             if room < 2 { break }
             let node = nodes[index]
             guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
-            let kids = childItems(store: store, id: node.id)
-            guard !kids.isEmpty else { continue }
+            let header = 18.0
+            guard node.height > header + options.minTileHeight else { continue }
+            let kids = gatherChildren(store: store, id: node.id, limit: min(8, room))
+            guard !kids.items.isEmpty || kids.foldedCount > 0 else { continue }
             let folded = TileFold.layoutMinimum(
-                items: kids,
-                x: node.x, y: node.y, width: node.width, height: node.height,
+                items: kids.items,
+                x: node.x, y: node.y + header, width: node.width, height: node.height - header,
                 gap: options.gap,
                 minWidth: options.minTileWidth,
                 minHeight: options.minTileHeight,
                 parent: node.id,
-                maxCount: min(8, room)
+                maxCount: min(8, room),
+                seededFoldCount: kids.foldedCount,
+                seededFoldBytes: kids.foldedBytes
             )
             let readable = retainReadable(
-                store: store, fold: folded, items: kids,
-                x: node.x, y: node.y, width: node.width, height: node.height, parent: node.id
+                store: store, fold: folded, items: kids.items,
+                x: node.x, y: node.y + header, width: node.width, height: node.height - header, parent: node.id
             )
             guard !readable.boxes.isEmpty else { continue }
             var childNodes: [Int] = []
@@ -283,7 +289,15 @@ public struct TreemapLayout: Equatable, Sendable {
             childIndex.append(contentsOf: childNodes)
             nodes[index].childStart = start
             nodes[index].childCount = childNodes.count
+            nodes[index].header = 18
             nodes[index].isDepthCapped = false
+            nodes[index].showsLabel = labelFits(
+                name: nodes[index].label,
+                bytes: nodes[index].sizeBytes,
+                width: nodes[index].width,
+                height: nodes[index].height,
+                header: 18
+            )
             opened = true
         }
         return opened
@@ -359,15 +373,43 @@ public struct TreemapLayout: Equatable, Sendable {
         )
     }
 
-    private func childItems(store: NodeStore, id: UInt32) -> [Squarify.Item] {
-        var items: [Squarify.Item] = []
+    private struct Gathered {
+        var items: [Squarify.Item]
+        var foldedCount: Int
+        var foldedBytes: Double
+    }
+
+    /// Keep only the largest `limit` children. The rest become one fold, without sorting the whole directory.
+    private func gatherChildren(store: NodeStore, id: UInt32, limit: Int) -> Gathered {
+        let keep = max(1, limit)
+        var best: [Squarify.Item] = []
+        best.reserveCapacity(keep)
+        var minIndex = 0
+        var foldedCount = 0
+        var foldedBytes = 0.0
         store.forEachChild(id) { child in
             if store.flags(child).contains(.trashed) { return }
             let weight = Double(store.bytes(child, options.metric))
             if weight <= 0 { return }
-            items.append(Squarify.Item(id: child, weight: weight))
+            if best.count < keep {
+                if best.isEmpty || weight < best[minIndex].weight { minIndex = best.count }
+                best.append(Squarify.Item(id: child, weight: weight))
+                return
+            }
+            if weight <= best[minIndex].weight {
+                foldedCount += 1
+                foldedBytes += weight
+                return
+            }
+            foldedCount += 1
+            foldedBytes += best[minIndex].weight
+            best[minIndex] = Squarify.Item(id: child, weight: weight)
+            minIndex = 0
+            for index in best.indices where best[index].weight < best[minIndex].weight {
+                minIndex = index
+            }
         }
-        return items
+        return Gathered(items: best, foldedCount: foldedCount, foldedBytes: foldedBytes)
     }
 
     private func boxesForChildren(store: NodeStore, kids: [Squarify.Item], x: Double, y: Double, width: Double, height: Double, parent: UInt32) -> [LayoutBox] {

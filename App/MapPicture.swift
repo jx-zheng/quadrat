@@ -68,7 +68,7 @@ struct MapPicture: Equatable {
                 y: node.y,
                 width: node.width,
                 height: node.height,
-                header: 0,
+                header: node.header,
                 kind: kind,
                 name: name,
                 sizeText: ByteFormat.bytes(bytes),

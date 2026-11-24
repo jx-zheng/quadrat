@@ -38,21 +38,20 @@ enum SnapshotRunner {
         let view = TreemapMapView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
         view.backingScale = 2
         var picture = MapPicture()
-        picture.tiles = [TileDraw(
-            id: 7,
-            x: 0, y: 0, width: 480, height: 320,
-            header: 0,
-            kind: .developer,
-            name: "Library",
-            sizeText: "40.6 GB",
-            showsLabel: true,
-            hatched: false,
-            depth: 1,
-            hasChildren: false,
-            isRemainder: false,
-            isDepthCapped: true,
-            bytes: 40_600_000_000
-        )]
+        picture.tiles = [
+            TileDraw(
+                id: 7, x: 0, y: 0, width: 230, height: 320, header: 0,
+                kind: .developer, name: "Library", sizeText: "40.6 GB",
+                showsLabel: true, hatched: false, depth: 1, hasChildren: false,
+                isRemainder: false, isDepthCapped: true, bytes: 40_600_000_000
+            ),
+            TileDraw(
+                id: 8, x: 242, y: 0, width: 238, height: 320, header: 0,
+                kind: .photos, name: "Pictures", sizeText: "12.0 GB",
+                showsLabel: true, hatched: false, depth: 1, hasChildren: false,
+                isRemainder: false, isDepthCapped: true, bytes: 12_000_000_000
+            )
+        ]
         let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = view
         view.layoutSubtreeIfNeeded()
@@ -85,27 +84,46 @@ enum SnapshotRunner {
             view.layer?.render(in: context)
         }
         NSGraphicsContext.restoreGraphicsState()
-        var low = [255, 255, 255]
-        var high = [0, 0, 0]
-        let cx = pixelsWide / 2
-        let cy = pixelsHigh / 2
-        for y in (cy - 24)...(cy + 24) {
-            for x in (cx - 24)...(cx + 24) {
-                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                let channels = [
-                    Int((color.redComponent * 255).rounded()),
-                    Int((color.greenComponent * 255).rounded()),
-                    Int((color.blueComponent * 255).rounded())
-                ]
-                for index in 0..<3 {
-                    low[index] = min(low[index], channels[index])
-                    high[index] = max(high[index], channels[index])
+        func sample(_ x: Int, _ y: Int) -> [Int]? {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
+            return [
+                Int((color.redComponent * 255).rounded()),
+                Int((color.greenComponent * 255).rounded()),
+                Int((color.blueComponent * 255).rounded())
+            ]
+        }
+        func spread(x0: Int, x1: Int, y0: Int, y1: Int) -> Int {
+            var low = [255, 255, 255]
+            var high = [0, 0, 0]
+            for y in y0...y1 {
+                for x in x0...x1 {
+                    guard let channels = sample(x, y) else { continue }
+                    for index in 0..<3 {
+                        low[index] = min(low[index], channels[index])
+                        high[index] = max(high[index], channels[index])
+                    }
                 }
             }
+            return zip(low, high).map { abs($0 - $1) }.max() ?? 255
         }
-        let spread = zip(low, high).map(-).map(abs).max() ?? 255
-        if spread > 8 || high[2] < 40 {
-            FileHandle.standardError.write(Data("leaf tile centre is not a flat colour (spread \(spread), blue \(high[2]))\n".utf8))
+        let midY = pixelsHigh / 2
+        let interior = spread(x0: 80, x1: 160, y0: midY - 20, y1: midY + 20)
+        guard let left = sample(120, midY), let right = sample(pixelsWide - 80, midY) else { exit(1) }
+        if interior > 8 || left[2] < 40 {
+            FileHandle.standardError.write(Data("leaf tile interior is not a flat colour (spread \(interior), blue \(left[2]))\n".utf8))
+            exit(1)
+        }
+        var ramp = 0
+        var previous = left
+        for x in 0..<pixelsWide {
+            guard let pixel = sample(x, midY) else { continue }
+            let jumped = zip(pixel, previous).map { abs($0 - $1) }.max() ?? 0
+            if jumped > 12 { ramp += 1 }
+            previous = pixel
+        }
+        _ = right
+        if ramp > 16 {
+            FileHandle.standardError.write(Data("tile edge is blurred (\(ramp) steep steps)\n".utf8))
             exit(1)
         }
         let url = URL(fileURLWithPath: path)

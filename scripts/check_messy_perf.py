@@ -20,7 +20,7 @@ def main() -> None:
     print(f"backing scale {report.get('backingScale')} hover draws {report.get('hoverDrawCount')}")
     assert report["hoverSamples"] >= 500
     assert report["hoverP99Ms"] < 4, "hover p99"
-    assert report["zoomP99Ms"] < 16, "zoom p99"
+    assert report["zoomP99Ms"] < 8, "zoom p99"
     assert report["peakRSSBytes"] < 100 * 1024 * 1024, "footprint"
     assert scan["itemsPerSecond"] >= 250_000, "scan rate"
     assert report["layoutMs"] < 50, "layout"

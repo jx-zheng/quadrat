@@ -18,8 +18,13 @@ struct DiskVolume: Identifiable, Equatable {
     var lastScanned: Date?
     var snapshotCount: Int
 
-    var used: UInt64 { capacity > available ? capacity - available : 0 }
-    var free: UInt64 { available }
+    /// Free space is this one figure. Used is capacity minus that same figure, so the
+    /// title and the footer cannot round two different numbers into 99.6 and 99.5.
+    var freeBytes: UInt64 { available }
+    var used: UInt64 { capacity > freeBytes ? capacity - freeBytes : 0 }
+    var free: UInt64 { freeBytes }
+    var freeText: String { ByteFormat.bytes(freeBytes) }
+    var usedText: String { ByteFormat.bytes(used) }
 }
 
 enum VolumeCatalog {

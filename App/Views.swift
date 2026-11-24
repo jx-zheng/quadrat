@@ -144,10 +144,10 @@ struct DiskCard: View {
                 }
                 usageBar
                 HStack {
-                    Text(volume.isNetwork ? "\(ByteFormat.bytes(volume.used)) used" : "\(ByteFormat.bytes(volume.used)) used")
+                    Text("\(volume.usedText) used")
                         .font(.system(size: 11, weight: .semibold))
                     Spacer()
-                    Text("\(ByteFormat.bytes(volume.free)) free of \(ByteFormat.bytes(volume.capacity))")
+                    Text("\(volume.freeText) free of \(ByteFormat.bytes(volume.capacity))")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -409,7 +409,7 @@ struct WorkspaceView: View {
                 let name = String(volume.detail.dropFirst(3))
                 return "\(ByteFormat.bytes(bytes)) · \(model.percentOfDisk(bytes)) of \(name)"
             }
-            return "\(ByteFormat.bytes(volume.used)) used · \(ByteFormat.percent(volume.used, of: volume.capacity)) · \(ByteFormat.bytes(volume.free)) free"
+            return "\(volume.usedText) used · \(ByteFormat.percent(volume.used, of: volume.capacity)) · \(volume.freeText) free"
         }
         let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.zoomID)
         let capacity = model.activeVolume?.capacity ?? 0
@@ -831,7 +831,7 @@ struct SidebarView: View {
                 sidebarRow(
                     symbol: volume.symbol,
                     title: volume.name,
-                    trailing: volume.isNetwork ? "Network" : (model.phase == .scanning && volume.id == model.activeVolume?.id ? "Scanning…" : ByteFormat.bytes(volume.isStartup ? (model.activeVolume?.used ?? volume.used) : volume.used)),
+                    trailing: volume.isNetwork ? "Network" : (model.phase == .scanning && volume.id == model.activeVolume?.id ? "Scanning…" : (volume.isStartup ? (model.activeVolume?.usedText ?? volume.usedText) : volume.usedText)),
                     selected: volume.id == (model.activeVolume?.id ?? model.selectedVolumeID)
                 ) {
                     model.choose(volume)
@@ -908,7 +908,7 @@ struct SidebarView: View {
             HStack {
                 Text(volume.name).font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text("\(ByteFormat.bytes(volume.free)) free")
+                Text("\(volume.freeText) free")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -920,7 +920,7 @@ struct SidebarView: View {
                 }
             }
             .frame(height: 5)
-            footerLine("Used (volume)", ByteFormat.bytes(volume.used))
+            footerLine("Used (volume)", volume.usedText)
             footerLine("Purgeable", ByteFormat.bytes(volume.purgeable))
             footerLine("Local snapshots", model.drawsTrafficLights ? ByteFormat.bytes(DemoDisk.snapshots) : (volume.snapshotCount > 0 ? "\(volume.snapshotCount)" : "None"))
             footerLine("Capacity", ByteFormat.bytes(volume.capacity))

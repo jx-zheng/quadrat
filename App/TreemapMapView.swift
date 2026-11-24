@@ -18,6 +18,7 @@ final class TreemapMapView: NSView {
     private let highlightLayer = CALayer()
     private var tileLayers: [CALayer] = []
     private var labelLayers: [CATextLayer] = []
+    private var headerLayers: [CALayer] = []
     private var tileLayout = TreemapLayout()
     private var rects: [UInt32: CGRect] = [:]
     private var shownPicture: MapPicture?
@@ -146,6 +147,7 @@ final class TreemapMapView: NSView {
         for index in tileLayers.indices {
             let box = tileLayers[index]
             let label = labelLayers[index]
+            let band = headerLayers[index]
             if index < tiles.count {
                 let tile = tiles[index]
                 let rect = CGRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
@@ -159,13 +161,23 @@ final class TreemapMapView: NSView {
                 if tile.hatched {
                     addHatch(to: box, size: rect.size)
                 }
-                label.isHidden = !tile.showsLabel || tile.name.isEmpty || rect.width < 36
-                label.frame = CGRect(x: 8, y: 6, width: max(0, rect.width - 16), height: min(32, max(0, rect.height - 10)))
-                label.string = tile.showsLabel && rect.height >= 36 ? "\(tile.name)\n\(tile.sizeText)" : tile.name
+                if tile.header > 1, tile.showsLabel {
+                    band.isHidden = false
+                    band.frame = CGRect(x: 0, y: 0, width: rect.width, height: tile.header)
+                    band.backgroundColor = NSColor.black.withAlphaComponent(scheme == .dark ? 0.28 : 0.16).cgColor
+                    label.frame = CGRect(x: 8, y: 1, width: max(0, rect.width - 16), height: max(0, tile.header - 2))
+                    label.string = "\(tile.name)  \(tile.sizeText)"
+                } else {
+                    band.isHidden = true
+                    label.frame = CGRect(x: 8, y: 6, width: max(0, rect.width - 16), height: min(34, max(0, rect.height - 8)))
+                    label.string = tile.height >= 36 ? "\(tile.name)\n\(tile.sizeText)" : tile.name
+                }
+                label.isHidden = !tile.showsLabel || tile.name.isEmpty
                 label.contentsScale = scale
             } else {
                 box.isHidden = true
                 label.isHidden = true
+                band.isHidden = true
             }
         }
         CATransaction.commit()
@@ -198,16 +210,20 @@ final class TreemapMapView: NSView {
             box.contentsScale = scale
             let label = CATextLayer()
             label.contentsScale = scale
-            label.fontSize = 11
+            label.fontSize = 12
             label.foregroundColor = NSColor.white.cgColor
             label.alignmentMode = .left
-            label.isWrapped = false
+            label.isWrapped = true
             label.truncationMode = .none
-            label.contentsScale = 1
+            let band = CALayer()
+            band.zPosition = 0.5
+            label.zPosition = 1
+            box.addSublayer(band)
             box.addSublayer(label)
             tilesLayer.addSublayer(box)
             tileLayers.append(box)
             labelLayers.append(label)
+            headerLayers.append(band)
         }
     }
 }
