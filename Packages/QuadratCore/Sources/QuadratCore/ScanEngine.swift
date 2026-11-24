@@ -184,7 +184,13 @@ public final class ScanEngine {
         while true {
             let job = jobs.popLocal(worker: worker) ?? jobs.steal(by: worker)
             if let job {
+                #if canImport(ObjectiveC)
+                autoreleasepool {
+                    process(node: job.node, path: job.path, worker: worker)
+                }
+                #else
                 process(node: job.node, path: job.path, worker: worker)
+                #endif
                 jobs.finishOne()
                 continue
             }
@@ -232,21 +238,28 @@ public final class ScanEngine {
 
         var seen = 0
         let outcome = enumerate(path) { entry in
-            if entry.name == "." || entry.name == ".." || entry.name.isEmpty { return }
+            if entry.isDotOrEmpty { return }
             seen += 1
+            let descend = entry.isDirectory && !entry.isSymlink && !entry.isMountPoint
+            let name: String
+            if self.skip != nil || descend || entry.inaccessible {
+                name = entry.nameString()
+            } else {
+                name = ""
+            }
             let childPath: String
-            if self.skip != nil || (entry.isDirectory && !entry.isSymlink && !entry.isMountPoint) {
-                childPath = self.join(path, entry.name)
+            if self.skip != nil || descend {
+                childPath = self.join(path, name)
             } else {
                 childPath = ""
             }
             if let skip = self.skip, skip(childPath) {
                 self.lock.lock()
                 self.inaccessible += 1
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
+                let kind = KindClassifier.classify(name: name, parent: parentKind, isDirectory: true)
                 _ = self.store.addNode(
                     parent: node,
-                    name: entry.name,
+                    name: name,
                     allocBytes: 0,
                     logicalBytes: 0,
                     kind: kind,
@@ -261,10 +274,10 @@ public final class ScanEngine {
                 let flags: NodeFlags = entry.isDirectory
                     ? [.directory, .inaccessible, .lowerBound]
                     : [.inaccessible, .lowerBound]
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: entry.isDirectory)
+                let kind = KindClassifier.classify(name: name, parent: parentKind, isDirectory: entry.isDirectory)
                 _ = self.store.addNode(
                     parent: node,
-                    name: entry.name,
+                    name: name,
                     allocBytes: 0,
                     logicalBytes: 0,
                     kind: kind,
@@ -275,14 +288,13 @@ public final class ScanEngine {
                 return
             }
 
-            let descend = entry.isDirectory && !entry.isSymlink && !entry.isMountPoint
             if descend {
                 self.lock.lock()
                 self.directories += 1
-                let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
+                let kind = KindClassifier.classify(name: name, parent: parentKind, isDirectory: true)
                 let child = self.store.addNode(
                     parent: node,
-                    name: entry.name,
+                    name: name,
                     allocBytes: 0,
                     logicalBytes: 0,
                     kind: kind,
@@ -295,11 +307,11 @@ public final class ScanEngine {
 
             let duplicate = entry.linkCount > 1 && !self.links.insertFirst(device: entry.device, file: entry.fileID)
             if entry.allocBytes >= Folding.minimumKeepBytes {
-                largeFiles.append((entry, duplicate))
+                largeFiles.append((entry.materialized(), duplicate))
                 return
             }
             if keptSmall.count < keepCount {
-                keptSmall.append((entry, duplicate))
+                keptSmall.append((entry.materialized(), duplicate))
                 return
             }
             var smallest = 0
@@ -309,9 +321,14 @@ public final class ScanEngine {
             if entry.allocBytes > keptSmall[smallest].entry.allocBytes {
                 let dropped = keptSmall[smallest]
                 fold(dropped.entry, duplicate: dropped.duplicate)
-                keptSmall[smallest] = (entry, duplicate)
+                keptSmall[smallest] = (entry.materialized(), duplicate)
+            } else if !duplicate {
+                foldedAlloc &+= entry.allocBytes
+                foldedLogical &+= entry.logicalBytes
+                foldedCount += 1
+                if entry.mayShareBlocks { foldedShare = true }
             } else {
-                fold(entry, duplicate: duplicate)
+                foldedCount += 1
             }
         }
 
@@ -413,11 +430,11 @@ public final class ScanEngine {
         }
     }
 
-    private func enumerate(_ path: String, _ body: (ListedEntry) -> Void) -> ListOutcome {
+    private func enumerate(_ path: String, _ body: (StreamedRecord) -> Void) -> ListOutcome {
         guard let lister else { return .failed }
-        let outcome = lister.enumerate(path: path, rootDevice: rootDevice, body)
+        let outcome = lister.enumerateStream(path: path, rootDevice: rootDevice, body)
         if case .unsupported = outcome, let fallback {
-            return fallback.enumerate(path: path, rootDevice: rootDevice, body)
+            return fallback.enumerateStream(path: path, rootDevice: rootDevice, body)
         }
         if lister is BulkListing, case .entries = outcome {
             lock.lock()

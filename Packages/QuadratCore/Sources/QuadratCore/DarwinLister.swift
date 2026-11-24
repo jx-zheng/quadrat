@@ -10,7 +10,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
 
     public func list(path: String, rootDevice: UInt64) -> ListOutcome {
         var entries: [ListedEntry] = []
-        let outcome = enumerate(path: path, rootDevice: rootDevice) { entries.append($0) }
+        let outcome = enumerateStream(path: path, rootDevice: rootDevice) { entries.append($0.materialized()) }
         if case .entries = outcome {
             return .entries(entries)
         }
@@ -18,6 +18,10 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     }
 
     public func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome {
+        enumerateStream(path: path, rootDevice: rootDevice) { body($0.materialized()) }
+    }
+
+    public func enumerateStream(path: String, rootDevice: UInt64, _ body: (StreamedRecord) -> Void) -> ListOutcome {
         let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
         if fd < 0 {
             if errno == EACCES || errno == EPERM { return .inaccessible }
@@ -100,7 +104,20 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         return (shares, privateSize)
     }
 
-    private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, body: (ListedEntry) -> Void) -> Bool {
+    private static func parse(buffer: [UInt8], count: Int, rootDevice: UInt64, body: (StreamedRecord) -> Void) -> Bool {
+        buffer.withUnsafeBufferPointer { raw in
+            guard let base = raw.baseAddress else { return false }
+            return parse(base: base, count: count, length: raw.count, rootDevice: rootDevice, body: body)
+        }
+    }
+
+    private static func parse(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        length bufferCount: Int,
+        rootDevice: UInt64,
+        body: (StreamedRecord) -> Void
+    ) -> Bool {
         var cursor = 0
         let errorBit = group(ATTR_CMN_ERROR)
         let nameBit = group(ATTR_CMN_NAME)
@@ -113,40 +130,42 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
         let totalBit = group(ATTR_FILE_TOTALSIZE)
         let allocBit = group(ATTR_FILE_ALLOCSIZE)
         for _ in 0..<count {
-            if cursor + 4 > buffer.count { return false }
-            let length = Int(readU32(buffer, cursor))
-            if length < 24 || cursor + length > buffer.count { return false }
+            if cursor + 4 > bufferCount { return false }
+            let recordLength = Int(readU32(base, cursor))
+            if recordLength < 24 || cursor + recordLength > bufferCount { return false }
             let record = cursor
             var field = cursor + 4
             // attribute_set_t is five attrgroup_t values. ATTR_CMN_ERROR, when present,
             // is packed immediately after it, ahead of the other common attributes.
-            let common = readU32(buffer, field)
-            let dir = readU32(buffer, field + 8)
-            let file = readU32(buffer, field + 12)
+            let common = readU32(base, field)
+            let dir = readU32(base, field + 8)
+            let file = readU32(base, field + 12)
             field += 20
             func take32() -> UInt32 {
-                let value = field + 4 <= record + length ? readU32(buffer, field) : 0
+                let value = field + 4 <= record + recordLength ? readU32(base, field) : 0
                 field += 4
                 return value
             }
             func take64() -> UInt64 {
-                let value = field + 8 <= record + length ? readU64(buffer, field) : 0
+                let value = field + 8 <= record + recordLength ? readU64(base, field) : 0
                 field += 8
                 return value
             }
             let error = (common & errorBit) != 0 ? take32() : 0
-            var name = ""
-            if (common & nameBit) != 0, field + 8 <= record + length {
+            var nameStart = 0
+            var nameCount = 0
+            if (common & nameBit) != 0, field + 8 <= record + recordLength {
                 let nameRef = field
-                let nameDelta = Int(readI32(buffer, field))
-                let nameLength = Int(readU32(buffer, field + 4))
+                let nameDelta = Int(readI32(base, field))
+                let nameLength = Int(readU32(base, field + 4))
                 field += 8
-                let nameStart = nameRef + nameDelta
-                let nameEnd = nameStart + max(0, nameLength)
-                if nameStart >= record, nameEnd <= record + length, nameLength > 0 {
-                    let slice = buffer[nameStart..<nameEnd]
-                    let trimmed = slice.prefix { $0 != 0 }
-                    name = String(decoding: trimmed, as: UTF8.self)
+                let start = nameRef + nameDelta
+                let end = start + max(0, nameLength)
+                if start >= record, end <= record + recordLength, nameLength > 0 {
+                    nameStart = start
+                    var trimmed = nameLength
+                    while trimmed > 0 && base[start + trimmed - 1] == 0 { trimmed -= 1 }
+                    nameCount = trimmed
                 }
             }
             let devid = (common & devBit) != 0 ? take32() : 0
@@ -157,14 +176,15 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             let linkCount = (file & linkBit) != 0 ? take32() : 1
             let totalSize = (file & totalBit) != 0 ? take64() : 0
             let allocSize = (file & allocBit) != 0 ? take64() : 0
-            if name != "." && name != ".." && !name.isEmpty {
+            if nameCount > 0 {
                 let isDir = objType == VDIR.rawValue
                 let isLink = objType == VLNK.rawValue
                 let device = UInt64(devid)
                 let point = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
                 let mount = isDir && ((mountStatus & point) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
                 let denied = error == UInt32(EACCES) || error == UInt32(EPERM)
-                body(ListedEntry(
+                let name = UnsafeBufferPointer(start: base + nameStart, count: nameCount)
+                let record = StreamedRecord(
                     name: name,
                     allocBytes: allocSize,
                     logicalBytes: totalSize,
@@ -174,10 +194,15 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
                     isDirectory: isDir,
                     isSymlink: isLink,
                     isMountPoint: mount,
+                    mayShareBlocks: false,
+                    privateBytes: 0,
                     inaccessible: denied
-                ))
+                )
+                if !record.isDotOrEmpty {
+                    body(record)
+                }
             }
-            cursor += length
+            cursor += recordLength
         }
         return true
     }
@@ -185,6 +210,26 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     /// Darwin imports some `ATTR_*` constants as `Int32` and others as `UInt32`.
     private static func group<T: BinaryInteger>(_ value: T) -> attrgroup_t {
         attrgroup_t(truncatingIfNeeded: value)
+    }
+
+    private static func readU32(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt32 {
+        var value: UInt32 = 0
+        withUnsafeMutableBytes(of: &value) { dest in
+            dest.copyBytes(from: UnsafeRawBufferPointer(start: base + offset, count: 4))
+        }
+        return value
+    }
+
+    private static func readI32(_ base: UnsafePointer<UInt8>, _ offset: Int) -> Int32 {
+        Int32(bitPattern: readU32(base, offset))
+    }
+
+    private static func readU64(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt64 {
+        var value: UInt64 = 0
+        withUnsafeMutableBytes(of: &value) { dest in
+            dest.copyBytes(from: UnsafeRawBufferPointer(start: base + offset, count: 8))
+        }
+        return value
     }
 
     private static func readU32(_ buffer: [UInt8], _ offset: Int) -> UInt32 {

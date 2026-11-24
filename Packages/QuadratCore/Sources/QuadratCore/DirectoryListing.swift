@@ -50,10 +50,57 @@ public enum ListOutcome: Equatable, Sendable {
     case failed
 }
 
+/// One directory record whose name bytes are valid only for the duration of the callback.
+public struct StreamedRecord {
+    public var name: UnsafeBufferPointer<UInt8>
+    public var allocBytes: UInt64
+    public var logicalBytes: UInt64
+    public var linkCount: UInt32
+    public var device: UInt64
+    public var fileID: UInt64
+    public var isDirectory: Bool
+    public var isSymlink: Bool
+    public var isMountPoint: Bool
+    public var mayShareBlocks: Bool
+    public var privateBytes: UInt64
+    public var inaccessible: Bool
+
+    public var isDotOrEmpty: Bool {
+        if name.isEmpty { return true }
+        if name.count == 1, name[0] == 46 { return true }
+        if name.count == 2, name[0] == 46, name[1] == 46 { return true }
+        return false
+    }
+
+    public func nameString() -> String {
+        if name.isEmpty { return "" }
+        return String(decoding: name, as: UTF8.self)
+    }
+
+    public func materialized() -> ListedEntry {
+        ListedEntry(
+            name: nameString(),
+            allocBytes: allocBytes,
+            logicalBytes: logicalBytes,
+            linkCount: linkCount,
+            device: device,
+            fileID: fileID,
+            isDirectory: isDirectory,
+            isSymlink: isSymlink,
+            isMountPoint: isMountPoint,
+            mayShareBlocks: mayShareBlocks,
+            privateBytes: privateBytes,
+            inaccessible: inaccessible
+        )
+    }
+}
+
 public protocol DirectoryListing: AnyObject {
     func list(path: String, rootDevice: UInt64) -> ListOutcome
     /// Yields entries without retaining the whole directory. Default builds the array from `list`.
     func enumerate(path: String, rootDevice: UInt64, _ body: (ListedEntry) -> Void) -> ListOutcome
+    /// Like `enumerate`, but the name is a pointer into the lister's buffer. Folded files never become `String`s.
+    func enumerateStream(path: String, rootDevice: UInt64, _ body: (StreamedRecord) -> Void) -> ListOutcome
 }
 
 extension DirectoryListing {
@@ -62,6 +109,31 @@ extension DirectoryListing {
         if case .entries(let entries) = outcome {
             for entry in entries {
                 body(entry)
+            }
+        }
+        return outcome
+    }
+
+    public func enumerateStream(path: String, rootDevice: UInt64, _ body: (StreamedRecord) -> Void) -> ListOutcome {
+        let outcome = list(path: path, rootDevice: rootDevice)
+        guard case .entries(let entries) = outcome else { return outcome }
+        for entry in entries {
+            let bytes = Array(entry.name.utf8)
+            bytes.withUnsafeBufferPointer { buffer in
+                body(StreamedRecord(
+                    name: buffer,
+                    allocBytes: entry.allocBytes,
+                    logicalBytes: entry.logicalBytes,
+                    linkCount: entry.linkCount,
+                    device: entry.device,
+                    fileID: entry.fileID,
+                    isDirectory: entry.isDirectory,
+                    isSymlink: entry.isSymlink,
+                    isMountPoint: entry.isMountPoint,
+                    mayShareBlocks: entry.mayShareBlocks,
+                    privateBytes: entry.privateBytes,
+                    inaccessible: entry.inaccessible
+                ))
             }
         }
         return outcome
