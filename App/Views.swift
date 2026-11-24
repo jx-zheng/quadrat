@@ -10,7 +10,9 @@ struct RootView: View {
         ZStack {
             QuadratTheme.window(scheme).ignoresSafeArea()
             VStack(spacing: 0) {
-                titleBar
+                if model.phase == .picker {
+                    titleBar
+                }
                 if model.phase == .picker {
                     DiskPickerView(model: model)
                 } else {
@@ -263,12 +265,8 @@ struct FullDiskAccessCard: View {
                 Button("Continue with Limited Access") { model.continueLimited() }
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
-                Button {
-                    model.openAccessSettings()
-                } label: {
-                    Label("Open System Settings", systemImage: "arrow.up.forward.app")
-                }
-                .buttonStyle(.borderedProminent)
+                Button("Open System Settings") { model.openAccessSettings() }
+                    .buttonStyle(.borderedProminent)
             }
             Text(FullDiskAccess.settingsURL.absoluteString)
                 .font(.system(size: 10, design: .monospaced))
@@ -343,10 +341,12 @@ struct WorkspaceView: View {
                     Circle().fill(Color(hex: 0x28C840)).frame(width: 12, height: 12)
                 }
             }
-            Button { model.zoomOut() } label: { Image(systemName: "chevron.left") }
+            Button { model.zoomOut() } label: { Text("‹").font(.system(size: 16, weight: .semibold)) }
                 .disabled(!model.isZoomed)
-            Button { model.zoomForward() } label: { Image(systemName: "chevron.right") }
+                .accessibilityLabel("Back")
+            Button { model.zoomForward() } label: { Text("›").font(.system(size: 16, weight: .semibold)) }
                 .disabled(model.forwardStack.isEmpty)
+                .accessibilityLabel("Forward")
             VStack(spacing: 1) {
                 Text(model.phase == .scanning ? (model.activeVolume?.name ?? "Scanning") : currentTitle)
                     .font(.system(size: 13, weight: .semibold))
@@ -356,28 +356,24 @@ struct WorkspaceView: View {
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
-            Picker("Size", selection: Binding(get: { model.metric }, set: { model.setMetric($0) })) {
-                Text("On Disk").tag(SizeMetric.allocated)
-                Text("Logical").tag(SizeMetric.logical)
+            HStack(spacing: 0) {
+                metricButton("On Disk", .allocated)
+                metricButton("Logical", .logical)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 168)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08)))
             .accessibilityLabel("Size metric")
-            HStack(spacing: 4) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $model.searchText)
-                    .textFieldStyle(.plain)
-                    .onSubmit { model.findSearch() }
-            }
-            .padding(.horizontal, 8)
-            .frame(width: 180, height: 26)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+            TextField("Search", text: $model.searchText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 8)
+                .frame(width: 180, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                .onSubmit { model.findSearch() }
             if model.phase == .scanning {
-                Button { model.stopScan() } label: { Label("Stop", systemImage: "stop.fill") }
+                Button("Stop") { model.stopScan() }
                     .buttonStyle(.bordered)
             } else {
-                Button { model.rescan() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Rescan")
+                Button("Rescan") { model.rescan() }
+                    .buttonStyle(.borderless)
                     .accessibilityLabel("Rescan")
             }
         }
@@ -385,6 +381,18 @@ struct WorkspaceView: View {
         .padding(.horizontal, 12)
         .frame(height: 52)
         .background(scheme == .dark ? Color.black.opacity(0.25) : Color.white.opacity(0.55))
+    }
+
+    private func metricButton(_ title: String, _ metric: SizeMetric) -> some View {
+        let selected = model.metric == metric
+        return Button(title) { model.setMetric(metric) }
+            .buttonStyle(.borderless)
+            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(selected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityLabel(title)
     }
 
     private var currentTitle: String {

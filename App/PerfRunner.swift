@@ -1,7 +1,11 @@
+import AppKit
 import Darwin
 import Foundation
 import QuadratCore
+import QuartzCore
+import SwiftUI
 
+@MainActor
 enum PerfRunner {
     static func run(directory: String, arguments: [String]) {
         let out = value(after: "--out", in: arguments) ?? "perf.json"
@@ -35,12 +39,13 @@ enum PerfRunner {
         }
 
         if let store = benchStore, store.rootID != 0 {
-            let frames = LayoutBench.measure(store: store, hoverSamples: 300, zoomSamples: 30)
+            let frames = RenderBench.measure(store: store)
             report["frames"] = [
                 "hoverP99Ms": frames.hoverP99Ms,
                 "zoomP99Ms": frames.zoomP99Ms,
                 "hoverSamples": frames.hoverSamples,
-                "zoomSamples": frames.zoomSamples
+                "zoomSamples": frames.zoomSamples,
+                "method": "NSView.display + CATransaction.flush"
             ]
         }
         benchStore = nil
@@ -77,7 +82,8 @@ enum PerfRunner {
             "kind": "in-memory",
             "files": listing.fileCount,
             "items": stats.items,
-            "nodes": store.nodeCount,
+            "nodes": store.liveNodeCount,
+            "nodeSlots": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
             "peakRSSBytes": Int(peak),
@@ -108,7 +114,8 @@ enum PerfRunner {
             "kind": "filesystem",
             "path": path,
             "items": stats.items,
-            "nodes": store.nodeCount,
+            "nodes": store.liveNodeCount,
+            "nodeSlots": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
             "peakRSSBytes": Int(peak),
@@ -147,6 +154,123 @@ enum PerfRunner {
     private static func value(after flag: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
         return arguments[index + 1]
+    }
+}
+
+@MainActor
+enum RenderBench {
+    struct Result {
+        var hoverP99Ms: Double
+        var zoomP99Ms: Double
+        var hoverSamples: Int
+        var zoomSamples: Int
+    }
+
+    static func measure(store: NodeStore) -> Result {
+        let hoverSamples = 40
+        let zoomSamples = 20
+        var model = MapPicture.make(
+            store: store,
+            root: store.rootID,
+            width: 1200,
+            height: 740,
+            metric: .allocated,
+            scanned: nil,
+            volumeUsed: nil,
+            zoomed: false
+        )
+        let view = TreemapRenderView(frame: NSRect(x: 0, y: 0, width: 1200, height: 740))
+        view.tiles = model.tiles
+        let window = NSWindow(
+            contentRect: view.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        view.layoutSubtreeIfNeeded()
+        view.display()
+        CATransaction.flush()
+
+        var hoverTimes: [Double] = []
+        hoverTimes.reserveCapacity(hoverSamples)
+        let hoverTargets = model.tiles.filter { $0.depth == 1 }
+        for sample in 0..<hoverSamples {
+            if hoverTargets.isEmpty {
+                view.hover = nil
+            } else {
+                let tile = hoverTargets[sample % hoverTargets.count]
+                view.hover = CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
+            }
+            let start = CACurrentMediaTime()
+            view.needsDisplay = true
+            view.display()
+            CATransaction.flush()
+            hoverTimes.append((CACurrentMediaTime() - start) * 1000)
+        }
+
+        let children = store.children(of: store.rootID)
+        var zoomTimes: [Double] = []
+        zoomTimes.reserveCapacity(zoomSamples)
+        for sample in 0..<zoomSamples {
+            let target = children.isEmpty ? store.rootID : children[sample % children.count]
+            let started = CACurrentMediaTime()
+            let picture = MapPicture.make(
+                store: store,
+                root: target,
+                width: 1200,
+                height: 740,
+                metric: sample.isMultiple(of: 2) ? .allocated : .logical,
+                scanned: nil,
+                volumeUsed: nil,
+                zoomed: true
+            )
+            view.tiles = picture.tiles
+            view.hover = picture.tiles.first.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+            view.needsDisplay = true
+            view.display()
+            CATransaction.flush()
+            zoomTimes.append((CACurrentMediaTime() - started) * 1000)
+        }
+        _ = model
+        return Result(
+            hoverP99Ms: percentile(hoverTimes, 0.99),
+            zoomP99Ms: percentile(zoomTimes, 0.99),
+            hoverSamples: hoverTimes.count,
+            zoomSamples: zoomTimes.count
+        )
+    }
+
+    private static func percentile(_ values: [Double], _ p: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let rank = Int((Double(sorted.count - 1) * p).rounded(.up))
+        return sorted[min(sorted.count - 1, max(0, rank))]
+    }
+}
+
+/// Draws the treemap tiles itself so a hover or zoom frame is real AppKit/Core Animation work.
+private final class TreemapRenderView: NSView {
+    var tiles: [TileDraw] = []
+    var hover: CGRect?
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedWhite: 0.12, alpha: 1).setFill()
+        dirtyRect.fill()
+        for tile in tiles {
+            let rect = NSRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
+            guard rect.intersects(dirtyRect) else { continue }
+            NSColor(calibratedRed: 0.2, green: 0.45, blue: 0.9, alpha: 1).setFill()
+            rect.fill()
+        }
+        if let hover {
+            NSColor.white.setStroke()
+            let path = NSBezierPath(rect: hover)
+            path.lineWidth = 2
+            path.stroke()
+        }
     }
 }
 

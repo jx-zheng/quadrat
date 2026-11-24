@@ -301,6 +301,25 @@ final class MemoryTests: XCTestCase {
         XCTAssertLessThan(bench.hoverP99Ms, 16)
         XCTAssertLessThan(bench.zoomP99Ms, 16)
     }
+
+    func testMacShapedTreeStaysUnderMemoryBudget() {
+        let listing = MacShapedListing(rootPath: "/mac")
+        XCTAssertGreaterThanOrEqual(listing.directoryCount, 1_000_000)
+        XCTAssertGreaterThanOrEqual(listing.fileCount + listing.directoryCount, 3_800_000)
+        let engine = ScanEngine(workerCount: 4)
+        let store = engine.scan(rootPath: "/mac", displayName: "Macintosh HD", lister: listing, rootDevice: 1)
+        let stats = engine.statistics()
+        XCTAssertGreaterThanOrEqual(stats.items, 3_800_000)
+        XCTAssertGreaterThanOrEqual(stats.directories, 900_000)
+        XCTAssertLessThan(store.liveNodeCount, 250_000, "folding should drop the million directories")
+        XCTAssertLessThan(store.estimatedPayloadBytes, 60_000_000, "model \(store.estimatedPayloadBytes) bytes")
+        // The previous / scan peaked at 781 MB with 2.17M retained nodes.
+        // AppKit plus the Swift runtime sat around 40 MB once the name table was not a dictionary of every filename.
+        let projectedPeakRSS = store.estimatedPayloadBytes + 40_000_000
+        XCTAssertLessThan(projectedPeakRSS, 100_000_000, "projected RSS \(projectedPeakRSS)")
+        XCTAssertGreaterThan(store.bytes(store.rootID, .allocated), 1 << 30)
+        print("mac-shaped live=\(store.liveNodeCount) slots=\(store.nodeCount) payload=\(store.estimatedPayloadBytes) items=\(stats.items) dirs=\(stats.directories) projected=\(projectedPeakRSS)")
+    }
 }
 
 final class KindTests: XCTestCase {

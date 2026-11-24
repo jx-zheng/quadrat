@@ -34,13 +34,10 @@ enum SnapshotRunner {
 
     private static func write<V: View>(_ view: V, to url: URL) -> Bool {
         let host = NSHostingView(rootView: view)
-        host.frame = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let window = NSWindow(
-            contentRect: host.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let points = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        host.frame = points
+        // Borderless, so the window does not draw a second set of traffic lights.
+        let window = NSWindow(contentRect: points, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         window.displayIfNeeded()
         host.layoutSubtreeIfNeeded()
@@ -48,17 +45,20 @@ enum SnapshotRunner {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             host.layoutSubtreeIfNeeded()
         }
-        if let data = renderedPNG(view) {
-            do {
-                try data.write(to: url)
-                return FileManager.default.fileExists(atPath: url.path)
-            } catch {
-                return false
-            }
-        }
-        let bounds = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: bounds) else { return false }
-        host.cacheDisplay(in: bounds, to: rep)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 2880,
+            pixelsHigh: 1800,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return false }
+        rep.size = NSSize(width: 1440, height: 900)
+        host.cacheDisplay(in: points, to: rep)
         guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         do {
             try data.write(to: url)
@@ -66,19 +66,6 @@ enum SnapshotRunner {
         } catch {
             return false
         }
-    }
-
-    /// 1440×900 points at 2×, matching the approved mockups.
-    private static func renderedPNG<V: View>(_ view: V) -> Data? {
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        renderer.isOpaque = true
-        renderer.proposedSize = ProposedViewSize(width: 1440, height: 900)
-        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else {
-            return nil
-        }
-        guard rep.pixelsWide >= 2000, rep.pixelsHigh >= 1200 else { return nil }
-        return rep.representation(using: .png, properties: [:])
     }
 
     private static func base() -> AppModel {

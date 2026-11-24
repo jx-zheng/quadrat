@@ -16,6 +16,9 @@ public struct NodeFlags: OptionSet, Equatable, Sendable {
     /// A descendant could not be read, so totals are a lower bound.
     public static let lowerBound = NodeFlags(rawValue: 1 << 9)
     public static let trashed = NodeFlags(rawValue: 1 << 10)
+    /// Children were dropped. The size and item count are the whole subtree.
+    /// Zooming re-lists the folder from disk.
+    public static let collapsed = NodeFlags(rawValue: 1 << 11)
 }
 
 public enum SizeMetric: String, Equatable, Hashable, Sendable {
@@ -57,11 +60,15 @@ public struct NodeStore: Equatable, Sendable {
     public var names = NameBlob()
     /// Bytes unique to this file (not shared with an APFS clone). Sparse side table.
     public var privateBytes: [UInt32: UInt64] = [:]
+    /// Recycled node ids. Slots stay in the arrays so the high-water mark is the peak, not the total ever created.
+    private var freeList: [UInt32] = []
 
     public init() {}
 
     public var endIndex: Int { parent.count }
     public var nodeCount: Int { max(0, parent.count - 1) }
+    /// Nodes that are still part of the tree. Recycled slots are not counted.
+    public var liveNodeCount: Int { max(0, nodeCount - freeList.count) }
 
     public var rootID: UInt32 {
         parent.count > 1 ? 1 : 0
@@ -69,7 +76,7 @@ public struct NodeStore: Equatable, Sendable {
 
     public var estimatedPayloadBytes: Int {
         let n = parent.count
-        let fixed = n * (MemoryLayout<UInt32>.size * 7 + MemoryLayout<UInt8>.size * 2 + MemoryLayout<UInt16>.size)
+        let fixed = n * (MemoryLayout<UInt32>.size * 8 + MemoryLayout<UInt8>.size * 2 + MemoryLayout<UInt16>.size)
         let priv = privateBytes.count * (MemoryLayout<UInt32>.size + MemoryLayout<UInt64>.size + 16)
         return fixed + names.storedBytes + priv
     }
@@ -100,18 +107,34 @@ public struct NodeStore: Equatable, Sendable {
         privateSize: UInt64? = nil
     ) -> UInt32 {
         let placed = names.add(name)
-        let id = UInt32(parent.count)
-        parent.append(parentID)
-        firstChild.append(0)
-        nextSibling.append(0)
-        lastChild.append(0)
-        nameOff.append(placed.offset)
-        alloc4K.append(SizeUnits.units(for: allocBytes))
-        logical4K.append(SizeUnits.units(for: logicalBytes))
-        itemCount.append(items)
-        nameLen.append(placed.length)
-        kindRaw.append(kind.rawValue)
-        flagsRaw.append(flags.rawValue)
+        let id: UInt32
+        if let reused = freeList.popLast() {
+            id = reused
+            parent[Int(id)] = parentID
+            firstChild[Int(id)] = 0
+            nextSibling[Int(id)] = 0
+            lastChild[Int(id)] = 0
+            nameOff[Int(id)] = placed.offset
+            alloc4K[Int(id)] = SizeUnits.units(for: allocBytes)
+            logical4K[Int(id)] = SizeUnits.units(for: logicalBytes)
+            itemCount[Int(id)] = items
+            nameLen[Int(id)] = placed.length
+            kindRaw[Int(id)] = kind.rawValue
+            flagsRaw[Int(id)] = flags.rawValue
+        } else {
+            id = UInt32(parent.count)
+            parent.append(parentID)
+            firstChild.append(0)
+            nextSibling.append(0)
+            lastChild.append(0)
+            nameOff.append(placed.offset)
+            alloc4K.append(SizeUnits.units(for: allocBytes))
+            logical4K.append(SizeUnits.units(for: logicalBytes))
+            itemCount.append(items)
+            nameLen.append(placed.length)
+            kindRaw.append(kind.rawValue)
+            flagsRaw.append(flags.rawValue)
+        }
         if let privateSize {
             privateBytes[id] = privateSize
         }
@@ -213,9 +236,95 @@ public struct NodeStore: Equatable, Sendable {
         return parts.reversed()
     }
 
-    /// Directory totals are the sum of children. File nodes are left alone.
+    public func depth(of id: UInt32) -> Int {
+        var depth = 0
+        var cursor = id
+        var guardrail = 0
+        while valid(cursor), parent[Int(cursor)] != 0, guardrail < parent.count {
+            depth += 1
+            cursor = parent[Int(cursor)]
+            guardrail += 1
+        }
+        return depth
+    }
+
+    /// Drop every descendant. The node keeps its name, size, and item count and becomes a leaf.
+    public mutating func collapseSubtree(_ id: UInt32) {
+        guard valid(id) else { return }
+        recycleDescendants(of: id)
+        flagsRaw[Int(id)] |= NodeFlags.collapsed.rawValue | NodeFlags.directory.rawValue
+    }
+
+    /// Keep the largest directories (and any at least `minimumKeep` bytes). Fold the rest into one node and recycle them.
+    public mutating func foldSmallDirectories(_ id: UInt32, keepCount: Int, minimumKeep: UInt64) {
+        guard valid(id) else { return }
+        var directories: [(id: UInt32, bytes: UInt64)] = []
+        forEachChild(id) { child in
+            guard isDirectory(child) else { return }
+            directories.append((child, bytes(child, .allocated)))
+        }
+        guard directories.count > keepCount else { return }
+        let ranked = directories.sorted { lhs, rhs in
+            if lhs.bytes != rhs.bytes { return lhs.bytes > rhs.bytes }
+            return lhs.id < rhs.id
+        }
+        var folded: [UInt32] = []
+        for (index, entry) in ranked.enumerated() {
+            if entry.bytes >= minimumKeep || index < keepCount { continue }
+            folded.append(entry.id)
+        }
+        guard !folded.isEmpty else { return }
+        var alloc: UInt64 = 0
+        var logical: UInt64 = 0
+        var items: UInt64 = 0
+        for child in folded {
+            alloc &+= bytes(child, .allocated)
+            logical &+= bytes(child, .logical)
+            let childFlags = flags(child)
+            if childFlags.contains(.directory) || childFlags.contains(.foldedAggregate) {
+                items &+= UInt64(itemCount[Int(child)])
+            } else {
+                items &+= 1
+            }
+            recycleDescendants(of: child)
+            unlink(child)
+            release(child)
+        }
+        let label = folded.count == 1 ? "1 smaller folder" : "\(folded.count) smaller folders"
+        _ = addNode(
+            parent: id,
+            name: label,
+            allocBytes: alloc,
+            logicalBytes: logical,
+            kind: kind(id),
+            flags: .foldedAggregate,
+            items: items > UInt64(UInt32.max) ? .max : UInt32(items)
+        )
+    }
+
+    /// Copy `other`'s children onto `id`, replacing a collapsed leaf with a freshly scanned tree.
+    public mutating func graft(from other: NodeStore, onto id: UInt32) {
+        guard valid(id), other.rootID != 0 else { return }
+        recycleDescendants(of: id)
+        flagsRaw[Int(id)] &= ~NodeFlags.collapsed.rawValue
+        func copy(_ source: UInt32, parent parentID: UInt32) {
+            let child = addNode(
+                parent: parentID,
+                name: other.name(of: source),
+                allocBytes: other.bytes(source, .allocated),
+                logicalBytes: other.bytes(source, .logical),
+                kind: other.kind(source),
+                flags: other.flags(source),
+                items: other.itemCount[Int(source)]
+            )
+            other.forEachChild(source) { copy($0, parent: child) }
+        }
+        other.forEachChild(other.rootID) { copy($0, parent: id) }
+    }
+
+    /// Directory totals are the sum of children. Collapsed directories keep the totals they already stored.
     public mutating func rollup(_ id: UInt32) {
-        guard valid(id), isDirectory(id) else { return }
+        guard valid(id), isDirectory(id), !flags(id).contains(.collapsed) else { return }
         var alloc: UInt64 = 0
         var logical: UInt64 = 0
         var items: UInt64 = 0
@@ -246,9 +355,9 @@ public struct NodeStore: Equatable, Sendable {
         guard rootID != 0 else { return }
         func walk(_ id: UInt32) {
             forEachChild(id) { child in
-                if isDirectory(child) { walk(child) }
+                if isDirectory(child), !flags(child).contains(.collapsed) { walk(child) }
             }
-            if isDirectory(id) { rollup(id) }
+            if isDirectory(id), !flags(id).contains(.collapsed) { rollup(id) }
         }
         walk(rootID)
     }
@@ -336,6 +445,50 @@ public struct NodeStore: Equatable, Sendable {
             }
         }
         lastChild[Int(parentID)] = child
+    }
+
+    private mutating func recycleDescendants(of id: UInt32) {
+        var pending: [UInt32] = []
+        var child = firstChild[Int(id)]
+        var guardrail = 0
+        while child != 0, valid(child), guardrail < parent.count {
+            pending.append(child)
+            child = nextSibling[Int(child)]
+            guardrail += 1
+        }
+        var index = 0
+        while index < pending.count {
+            let node = pending[index]
+            index += 1
+            var next = firstChild[Int(node)]
+            var steps = 0
+            while next != 0, valid(next), steps < parent.count {
+                pending.append(next)
+                next = nextSibling[Int(next)]
+                steps += 1
+            }
+        }
+        for node in pending.reversed() {
+            release(node)
+        }
+        if valid(id) {
+            firstChild[Int(id)] = 0
+            lastChild[Int(id)] = 0
+        }
+    }
+
+    private mutating func release(_ id: UInt32) {
+        guard valid(id), id != 0 else { return }
+        parent[Int(id)] = 0
+        firstChild[Int(id)] = 0
+        nextSibling[Int(id)] = 0
+        lastChild[Int(id)] = 0
+        alloc4K[Int(id)] = 0
+        logical4K[Int(id)] = 0
+        itemCount[Int(id)] = 0
+        flagsRaw[Int(id)] = 0
+        privateBytes[id] = nil
+        freeList.append(id)
     }
 
     private mutating func unlink(_ id: UInt32) {

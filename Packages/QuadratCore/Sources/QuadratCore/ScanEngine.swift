@@ -146,6 +146,7 @@ public final class ScanEngine {
         }
         lock.lock()
         store.recomputeAll()
+        pendingChildren.removeAll()
         lock.unlock()
         self.queue = nil
         return store
@@ -274,7 +275,13 @@ public final class ScanEngine {
             }
         }
 
-        let decision = Folding.partition(files.map { Folding.FileChoice(key: $0.key, bytes: $0.entry.allocBytes) })
+        lock.lock()
+        let depth = store.depth(of: node)
+        lock.unlock()
+        let decision = Folding.partition(
+            files.map { Folding.FileChoice(key: $0.key, bytes: $0.entry.allocBytes) },
+            keepCount: Folding.largestKept(depth: depth)
+        )
         let keep = Set(decision.keep)
         var foldedAlloc: UInt64 = 0
         var foldedLogical: UInt64 = 0
@@ -369,6 +376,14 @@ public final class ScanEngine {
     private func complete(_ id: UInt32) {
         lock.lock()
         store.rollup(id)
+        let depth = store.depth(of: id)
+        let size = store.bytes(id, .allocated)
+        if id != store.rootID, store.isDirectory(id), Folding.shouldCollapseSubtree(depth: depth, bytes: size) {
+            store.collapseSubtree(id)
+        } else if store.isDirectory(id) {
+            store.foldSmallDirectories(id, keepCount: Folding.largestKept(depth: depth), minimumKeep: Folding.minimumKeepBytes)
+            store.rollup(id)
+        }
         let parent = id < UInt32(store.endIndex) ? store.parent[Int(id)] : 0
         var parentDone = false
         if parent != 0 {

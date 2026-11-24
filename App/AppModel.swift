@@ -217,6 +217,15 @@ final class AppModel: ObservableObject {
 
     func zoom(into id: UInt32) {
         guard store.isDirectory(id), id != zoomID else { return }
+        if store.flags(id).contains(.collapsed), let path = url(for: id)?.path {
+            let built = ScanEngine(workerCount: 1).scan(
+                rootPath: path,
+                displayName: store.name(of: id),
+                lister: BulkDirectoryListing(),
+                fallback: POSIXListing()
+            )
+            store.graft(from: built, onto: id)
+        }
         forwardStack.removeAll()
         zoomStack.append(id)
         selection = nil
