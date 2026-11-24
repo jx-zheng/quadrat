@@ -132,7 +132,8 @@ public struct TileGrid: Equatable, Sendable {
                     let node = nodes[index]
                     guard node.contains(x, y) else { continue }
                     let area = node.width * node.height
-                    if area < bestArea {
+                    let deeper = best.map { nodes[$0].depth < node.depth } ?? false
+                    if area < bestArea || (area == bestArea && deeper) {
                         bestArea = area
                         best = index
                     }

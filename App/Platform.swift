@@ -63,7 +63,8 @@ enum VolumeCatalog {
                 detail: detail,
                 symbol: symbol,
                 capacity: capacity,
-                available: available,
+                // Finder's free space includes purgeable space. Used is what's left.
+                available: important,
                 purgeable: purgeable,
                 isNetwork: network,
                 isStartup: startup,

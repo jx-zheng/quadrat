@@ -59,26 +59,21 @@ struct MapPicture: Equatable {
             let flags = remainder ? NodeFlags() : store.flags(node.id)
             let bytes = node.sizeBytes > 0 ? node.sizeBytes : store.bytes(source, metric)
             let kind = remainder ? store.kind(source) : store.kind(node.id)
-            let name: String
-            if !node.headerTitle.isEmpty {
-                name = node.headerTitle
-            } else if remainder {
-                name = "\(max(node.foldedCount, 1)) smaller items"
-            } else {
-                name = store.name(of: node.id)
-            }
+            let name = node.label.isEmpty
+                ? (remainder ? "\(max(node.foldedCount, 1)) smaller items" : store.name(of: node.id))
+                : node.label
             tiles.append(TileDraw(
                 id: node.id,
                 x: node.x,
                 y: node.y,
                 width: node.width,
                 height: node.height,
-                header: node.header,
+                header: 0,
                 kind: kind,
                 name: name,
                 sizeText: ByteFormat.bytes(bytes),
                 showsLabel: node.showsLabel,
-                hatched: remainder || flags.contains(.hatched),
+                hatched: flags.contains(.hatched),
                 depth: node.depth,
                 hasChildren: node.childCount > 0,
                 isRemainder: remainder,

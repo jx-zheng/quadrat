@@ -347,13 +347,12 @@ final class LayoutPolicyTests: XCTestCase {
             store: store, rootID: root, width: 900, height: 600,
             options: TreemapOptions(gap: 2, maxVisibleDepth: 2, minTileWidth: 40, minTileHeight: 24)
         )
-        let remainder = layout.nodes.filter(\.isRemainder)
-        XCTAssertEqual(remainder.count, 1)
-        XCTAssertGreaterThanOrEqual(remainder[0].foldedCount, 40)
-        for node in layout.nodes where node.depth >= 2 {
-            XCTAssertGreaterThanOrEqual(node.width, 40, "width \(node.width) id \(node.id)")
-            XCTAssertGreaterThanOrEqual(node.height, 24, "height \(node.height) id \(node.id)")
-        }
+        let names = layout.nodes.filter { $0.depth > 1 }.map(\.label)
+        XCTAssertFalse(names.contains { $0.hasPrefix("tiny-") }, "tiny files stay inside the fold")
+        let huge = layout.nodes.filter { $0.label == "huge" }
+        XCTAssertEqual(huge.count, 1)
+        XCTAssertGreaterThan(huge[0].width, 40)
+        XCTAssertGreaterThan(huge[0].height, 24)
     }
 
     func testLabelsRequireTheFullNameAndSize() {
@@ -407,6 +406,60 @@ final class LayoutPolicyTests: XCTestCase {
         XCTAssertEqual(children.count, 2)
     }
 
+    func testTileAreaMatchesBytesIncludingFolds() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        _ = store.addNode(parent: root, name: "Users", allocBytes: 50_000_000_000, logicalBytes: 50_000_000_000, kind: .other, flags: [])
+        _ = store.addNode(parent: root, name: "Applications", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .apps, flags: [])
+        for index in 0..<40 {
+            _ = store.addNode(parent: root, name: "tiny-\(index)", allocBytes: 20_000_000, logicalBytes: 20_000_000, kind: .other, flags: [])
+        }
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1000, height: 600,
+            options: TreemapOptions(gap: 0, maxVisibleDepth: 1, minTileWidth: 40, minTileHeight: 24, maxTiles: 60)
+        )
+        let rootArea = 1000.0 * 600.0
+        let rootBytes = Double(layout.nodes[layout.root].sizeBytes)
+        XCTAssertGreaterThan(rootBytes, 0)
+        let tiles = layout.nodes.filter { $0.depth > 0 }
+        XCTAssertLessThanOrEqual(tiles.count, 60)
+        XCTAssertTrue(tiles.contains { $0.isRemainder && $0.foldedCount >= 40 })
+        for tile in tiles {
+            let areaFraction = (tile.width * tile.height) / rootArea
+            let byteFraction = Double(tile.sizeBytes) / rootBytes
+            XCTAssertEqual(areaFraction, byteFraction, accuracy: 0.01, "\(tile.label) area \(areaFraction) bytes \(byteFraction)")
+            XCTAssertFalse(tile.label.isEmpty, "unnamed tile")
+        }
+    }
+
+    func testMessyViewShowsAtMostSixtyNamedTiles() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "home")
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let person = store.addNode(parent: users, name: "person", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let library = store.addNode(parent: person, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        for index in 0..<180 {
+            let bytes = UInt64(index + 1) * 8_000_000
+            _ = store.addNode(parent: library, name: "item-\(index)", allocBytes: bytes, logicalBytes: bytes, kind: .other, flags: [])
+        }
+        _ = store.addNode(parent: root, name: "Applications", allocBytes: 4_000_000_000, logicalBytes: 4_000_000_000, kind: .apps, flags: [])
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1200, height: 800,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        let tiles = layout.nodes.filter { $0.depth > 0 }
+        XCTAssertLessThanOrEqual(tiles.count, 60, "visible \(tiles.count)")
+        XCTAssertFalse(tiles.isEmpty)
+        for tile in tiles {
+            XCTAssertFalse(tile.label.isEmpty, "unnamed tile id \(tile.id)")
+            XCTAssertFalse(tile.label.contains("…"))
+        }
+        XCTAssertTrue(tiles.contains { $0.headerTitle.contains("Users / person / Library") || $0.label.contains("Users / person / Library") })
+        XCTAssertFalse(tiles.contains { $0.header > 0 }, "header bars belong in the top breadcrumb, not the map")
+    }
+
     func testSpatialIndexMatchesTheSmallestContainingTile() {
         var store = NodeStore()
         let root = store.addRoot(name: "disk")
@@ -445,7 +498,7 @@ final class LayoutPolicyTests: XCTestCase {
             let node = layout.nodes[index]
             guard node.contains(x, y) else { continue }
             let area = node.width * node.height
-            if area < bestArea {
+            if area < bestArea || (area == bestArea && node.depth > layout.nodes[best].depth) {
                 bestArea = area
                 best = index
             }

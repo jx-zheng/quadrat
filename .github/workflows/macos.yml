@@ -112,6 +112,12 @@ jobs:
             --snapshot-scheme dark
           find /tmp/quadrat-messy -mindepth 1 -maxdepth 1 ! -name perf.json ! -name 'messy-*.png' -exec rm -rf {} +
 
+      - name: Volume, home, and drill snapshots
+        run: |
+          mkdir -p /tmp/quadrat-volume
+          "${{ steps.app.outputs.bin }}" --snapshot-suite /tmp/quadrat-volume
+          find /tmp/quadrat-volume -name '*.png' | sort
+
       - name: Upload snapshots and perf
         uses: actions/upload-artifact@v4
         with:
@@ -130,6 +136,13 @@ jobs:
             /tmp/quadrat-messy/perf.json
             /tmp/quadrat-messy/messy-light.png
             /tmp/quadrat-messy/messy-dark.png
+          if-no-files-found: error
+
+      - name: Upload volume snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-volume
+          path: /tmp/quadrat-volume/
           if-no-files-found: error
 
   demo:

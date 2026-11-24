@@ -52,9 +52,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
+        if let directory = argument("--snapshot-suite", in: args) {
+            SnapshotRunner.renderSuite(into: directory)
+            exit(0)
+        }
         if let path = argument("--snapshot-path", in: args), let out = argument("--snapshot-out", in: args) {
             let scheme: ColorScheme = argument("--snapshot-scheme", in: args) == "dark" ? .dark : .light
-            SnapshotRunner.render(path: path, to: out, scheme: scheme)
+            SnapshotRunner.render(path: path, to: out, scheme: scheme, drill: args.contains("--snapshot-drill"))
             exit(0)
         }
         if let path = argument("--perf-path", in: args) {

@@ -137,28 +137,15 @@ final class AppModel: ObservableObject {
     func scanFolder(_ url: URL) {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return }
-        let volume = DiskVolume(
-            id: url.path,
-            name: url.lastPathComponent,
-            detail: "Folder",
-            symbol: "folder",
-            capacity: 0,
-            available: 0,
-            purgeable: 0,
-            isNetwork: false,
-            isStartup: url.path.hasPrefix(NSHomeDirectory()) || url.path == "/",
-            isRemovable: false,
-            lastScanned: LastScanStore.date(for: url.path),
-            snapshotCount: 0
-        )
-        if !FullDiskAccess.isGranted() {
-            pendingVolume = volume
+        let session = VolumeMode.prepare(path: url.path)
+        if session.volume.isStartup && !FullDiskAccess.isGranted() {
+            pendingVolume = session.volume
             showAccess = true
             accessWaiting = true
             phase = .picker
             return
         }
-        launchScan(volume, limited: false)
+        launchScan(session.volume, limited: false)
     }
 
     func stopScan() {
@@ -290,6 +277,21 @@ final class AppModel: ObservableObject {
     var breadcrumbIDs: [UInt32] {
         guard store.rootID != 0 else { return [] }
         return store.chain(to: zoomID)
+    }
+
+    /// One strip. Collapsed single-child folders are part of this line, not bars in the map.
+    var mapBreadcrumb: String {
+        var parts = breadcrumbIDs.map { store.name(of: $0) }
+        if parts.isEmpty, let name = activeVolume?.name, !name.isEmpty {
+            parts = [name]
+        }
+        if picture.layout.nodes.indices.contains(picture.layout.root) {
+            let chain = picture.layout.nodes[picture.layout.root].headerTitle
+            if !chain.isEmpty {
+                parts.append(chain)
+            }
+        }
+        return parts.joined(separator: " / ")
     }
 
     func moveSelection(dx: CGFloat, dy: CGFloat) {
@@ -540,18 +542,7 @@ final class AppModel: ObservableObject {
             )
             box.running = false
             var finished = result
-            let scanned = finished.rootID == 0 ? 0 : finished.bytes(finished.rootID, .allocated)
-            if volume.used > scanned, finished.rootID != 0 {
-                _ = finished.addNode(
-                    parent: finished.rootID,
-                    name: "System & Other",
-                    allocBytes: volume.used - scanned,
-                    logicalBytes: volume.used - scanned,
-                    kind: .system,
-                    flags: [.hatched]
-                )
-                finished.rollup(finished.rootID)
-            }
+            VolumeMode.addUnscannedGap(store: &finished, volume: volume)
             CloneProbe.apply(store: &finished, rootPath: scanRoot)
             let finalStats = engine.statistics()
             DispatchQueue.main.async {

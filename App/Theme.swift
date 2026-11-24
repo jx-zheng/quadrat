@@ -23,6 +23,16 @@ enum QuadratTheme {
     }
 
     /// Same-kind siblings shift a few percent so they don't read as one flat slab.
+    static func components(_ kind: ContentKind, _ scheme: ColorScheme, variant: UInt32) -> (CGFloat, CGFloat, CGFloat) {
+        let hex = kindHex(kind, scheme)
+        let step = Double(Int(variant % 5) - 2) * 0.045
+        func channel(_ shift: Int) -> CGFloat {
+            let value = Double((hex >> shift) & 0xFF) / 255 + step
+            return CGFloat(min(1, max(0, value)))
+        }
+        return (channel(16), channel(8), channel(0))
+    }
+
     static func varied(_ kind: ContentKind, _ scheme: ColorScheme, variant: UInt32) -> Color {
         let hex = kindHex(kind, scheme)
         let step = Double(Int(variant % 5) - 2) * 0.045

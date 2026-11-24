@@ -1,5 +1,6 @@
 import AppKit
 import QuadratCore
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -33,39 +34,11 @@ enum SnapshotRunner {
     }
 
     /// Scan a real directory and write the main window at 1440×900 pt, @2x.
-    static func render(path: String, to out: String, scheme: ColorScheme) {
-        let engine = ScanEngine(workerCount: 8)
-        let store = engine.scan(
-            rootPath: path,
-            displayName: URL(fileURLWithPath: path).lastPathComponent,
-            lister: BulkDirectoryListing(),
-            fallback: POSIXListing()
-        )
-        let model = AppModel()
-        model.store = store
-        model.phase = .map
-        model.displayRoot = path
-        model.homePrefix = path
-        model.drawsTrafficLights = true
-        model.viewport = CGSize(width: 1000, height: 760)
-        let bytes = store.bytes(store.rootID, .allocated)
-        model.activeVolume = DiskVolume(
-            id: path,
-            name: URL(fileURLWithPath: path).lastPathComponent,
-            detail: "Folder",
-            symbol: "folder",
-            capacity: max(bytes, 1),
-            available: 0,
-            purgeable: 0,
-            isNetwork: false,
-            isStartup: false,
-            isRemovable: false,
-            lastScanned: Date(),
-            snapshotCount: 0
-        )
-        model.volumes = [model.activeVolume].compactMap { $0 }
-        model.selectedVolumeID = path
-        model.rebuildPicture()
+    static func render(path: String, to out: String, scheme: ColorScheme, drill: Bool = false) {
+        let model = scannedModel(path: path)
+        if drill, let target = largestDirectory(in: model) {
+            model.zoom(into: target)
+        }
         NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         let view = RootView(model: model)
             .frame(width: 1440, height: 900)
@@ -74,6 +47,73 @@ enum SnapshotRunner {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !write(view, to: url) {
             FileHandle.standardError.write(Data("failed to render \(out)\n".utf8))
+            exit(1)
+        }
+    }
+
+    /// Volume root, home, and one drill-in, each in light and dark. Each root is scanned once.
+    static func renderSuite(into directory: String) {
+        let folder = URL(fileURLWithPath: directory, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        renderPair(path: "/", prefix: folder.appendingPathComponent("volume").path, drill: true)
+        renderPair(path: NSHomeDirectory(), prefix: folder.appendingPathComponent("home").path, drill: false)
+    }
+
+    private static func renderPair(path: String, prefix: String, drill: Bool) {
+        let model = scannedModel(path: path)
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let name = scheme == .light ? "light" : "dark"
+            render(model: model, scheme: scheme, to: "\(prefix)-\(name).png")
+        }
+        guard drill, let target = largestDirectory(in: model) else { return }
+        model.zoom(into: target)
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let name = scheme == .light ? "light" : "dark"
+            render(model: model, scheme: scheme, to: "\(prefix)-drill-\(name).png")
+        }
+    }
+
+    private static func scannedModel(path: String) -> AppModel {
+        let session = VolumeMode.prepare(path: path)
+        let engine = ScanEngine(workerCount: 8)
+        var store = engine.scan(
+            rootPath: session.scanRoot,
+            displayName: session.volume.name,
+            lister: BulkDirectoryListing(),
+            fallback: POSIXListing()
+        )
+        VolumeMode.addUnscannedGap(store: &store, volume: session.volume)
+        if session.scanRoot == "/" || session.scanRoot == "/System/Volumes/Data" {
+            CloneProbe.apply(store: &store, rootPath: session.scanRoot)
+        }
+        let model = AppModel()
+        model.store = store
+        model.stats = engine.statistics()
+        model.phase = .map
+        model.displayRoot = session.displayRoot
+        model.homePrefix = NSHomeDirectory()
+        model.drawsTrafficLights = true
+        model.viewport = CGSize(width: 1000, height: 760)
+        model.activeVolume = session.volume
+        model.volumes = [session.volume]
+        model.selectedVolumeID = session.volume.id
+        model.rebuildPicture()
+        return model
+    }
+
+    private static func largestDirectory(in model: AppModel) -> UInt32? {
+        model.store.children(of: model.store.rootID)
+            .filter { model.store.isDirectory($0) && !model.store.flags($0).contains(.hatched) }
+            .max { model.store.bytes($0, .allocated) < model.store.bytes($1, .allocated) }
+    }
+
+    private static func render(model: AppModel, scheme: ColorScheme, to path: String) {
+        NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        let view = RootView(model: model)
+            .frame(width: 1440, height: 900)
+            .environment(\.colorScheme, scheme)
+        if !write(view, to: URL(fileURLWithPath: path)) {
+            FileHandle.standardError.write(Data("failed to render \(path)\n".utf8))
             exit(1)
         }
     }
@@ -89,6 +129,7 @@ enum SnapshotRunner {
         window.contentView = host
         window.displayIfNeeded()
         host.layoutSubtreeIfNeeded()
+        CATransaction.flush()
         for _ in 0..<4 {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             host.layoutSubtreeIfNeeded()

@@ -396,6 +396,7 @@ struct WorkspaceView: View {
     }
 
     private var currentTitle: String {
+        if !model.isZoomed, let name = model.activeVolume?.name, !name.isEmpty { return name }
         guard model.store.rootID != 0 else { return "Quadrat" }
         return model.store.name(of: model.zoomID)
     }
@@ -406,6 +407,9 @@ struct WorkspaceView: View {
             let items = readout?.items ?? model.stats.items
             let rate = readout?.rate ?? model.stats.itemsPerSecond
             return "Scanning… \(ByteFormat.grouped(UInt64(items))) items · \(ByteFormat.rate(rate))"
+        }
+        if !model.isZoomed, let volume = model.activeVolume, volume.capacity > 0 {
+            return "\(ByteFormat.bytes(volume.used)) used · \(ByteFormat.percent(volume.used, of: volume.capacity)) · \(ByteFormat.bytes(volume.free)) free"
         }
         let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.zoomID)
         let whole = model.activeVolume?.capacity ?? bytes
@@ -449,16 +453,10 @@ struct WorkspaceView: View {
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            ForEach(Array(model.breadcrumbIDs.enumerated()), id: \.offset) { index, id in
-                if index > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                Button(model.store.name(of: id)) { model.zoomTo(index: index) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: index == model.breadcrumbIDs.count - 1 ? .semibold : .regular))
-            }
+            Text(model.mapBreadcrumb)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer()
             Text("Click to zoom")
                 .foregroundStyle(.secondary)
@@ -488,8 +486,18 @@ struct WorkspaceView: View {
         GeometryReader { geo in
             let picture = model.picture
             ZStack(alignment: .topLeading) {
-                TreemapCanvas(picture: picture, scheme: scheme)
-                    .equatable()
+                TreemapHost(
+                    picture: picture,
+                    scheme: scheme,
+                    hover: model.hover,
+                    onHover: { id in
+                        let next = (id == nil || id == model.zoomID) ? nil : id
+                        if model.hover != next { model.hover = next }
+                    },
+                    onClick: { point in
+                        model.click(at: point)
+                    }
+                )
                 if picture.hatch.width > 2 {
                     HatchOverlay(
                         rect: picture.hatch,
@@ -499,21 +507,8 @@ struct WorkspaceView: View {
                     )
                 }
                 if let hover = model.hover, model.phase != .picker, !model.showTrash, let tile = picture.tiles.first(where: { $0.id == hover }) {
-                    HoverOutline(tile: tile, scheme: scheme)
                     TooltipCard(model: model, id: hover)
                         .position(tooltipPosition(tile: tile, in: geo.size))
-                } else if let selection = model.selection, let tile = picture.tiles.first(where: { $0.id == selection }) {
-                    HoverOutline(tile: tile, scheme: scheme)
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(SpatialTapGesture().onEnded { value in
-                model.click(at: value.location)
-            })
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point): model.hover(at: point)
-                case .ended: model.clearHover()
                 }
             }
             .onAppear { model.updateViewport(geo.size) }
@@ -613,6 +608,28 @@ struct WorkspaceView: View {
             return "\(ByteFormat.grouped(UInt64(model.store.itemCount[Int(id)]))) items"
         }
         return "file"
+    }
+}
+
+struct TreemapHost: NSViewRepresentable {
+    var picture: MapPicture
+    var scheme: ColorScheme
+    var hover: UInt32?
+    var onHover: (UInt32?) -> Void
+    var onClick: (CGPoint) -> Void
+
+    func makeNSView(context: Context) -> TreemapMapView {
+        let view = TreemapMapView(frame: .zero)
+        view.backingScale = 2
+        return view
+    }
+
+    func updateNSView(_ view: TreemapMapView, context: Context) {
+        view.onHoverID = onHover
+        view.onClick = onClick
+        view.backingScale = 2
+        view.show(picture: picture, scheme: scheme)
+        view.highlight(id: hover)
     }
 }
 
