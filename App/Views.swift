@@ -24,7 +24,7 @@ struct RootView: View {
                 FullDiskAccessCard(model: model)
             }
         }
-        .frame(minWidth: 960, minHeight: 640)
+        .frame(minWidth: model.demoFrame ? 1600 : 960, minHeight: model.demoFrame ? 1000 : 640)
         .onAppear { model.installKeyMonitor() }
         .onDisappear { model.removeKeyMonitor() }
     }

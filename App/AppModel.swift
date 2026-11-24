@@ -40,6 +40,8 @@ final class AppModel: ObservableObject {
     @Published var picture = MapPicture()
     @Published var viewport = CGSize(width: 1000, height: 720)
     @Published var drawsTrafficLights = false
+    /// Locks the demo window to 1600×1000 so a screen recording is not mostly desktop.
+    @Published var demoFrame = false
     @Published var itemCountOverride: UInt64?
     @Published var inaccessibleOverride: Int?
     @Published var elapsedOverride: TimeInterval?

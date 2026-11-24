@@ -121,24 +121,25 @@ jobs:
           swiftc scripts/window_id.swift -o /tmp/window_id
           "$BIN" --demo > /tmp/quadrat-demo/app.log 2>&1 &
           APP=$!
-          WID=""
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
+          sleep 2
+          RECT=""
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             sleep 0.5
-            WID="$(/tmp/window_id || true)"
-            if [ -n "$WID" ]; then
+            RECT="$(/tmp/window_id | head -n 1 || true)"
+            if [ -n "$RECT" ]; then
               break
             fi
           done
-          echo "window id: ${WID:-none}"
-          if [ -n "$WID" ]; then
-            screencapture -o -l "$WID" -V 85 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          echo "window rect: ${RECT:-none}"
+          if [ -n "$RECT" ]; then
+            screencapture -R "$RECT" -V 80 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
           else
-            screencapture -V 85 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+            screencapture -V 80 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
           fi
           CAP=$!
           wait "$APP" || true
           sleep 1
-          kill -INT "$CAP" || true
+          pkill -INT screencapture || true
           wait "$CAP" || true
           test -s "$MOV"
           wc -c "$MOV"

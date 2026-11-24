@@ -9,6 +9,7 @@ enum DemoRunner {
         model.volumes = DemoDisk.volumes()
         model.selectedVolumeID = "/"
         model.drawsTrafficLights = true
+        model.demoFrame = true
         model.phase = .picker
         model.showAccess = false
         model.showTrash = false
