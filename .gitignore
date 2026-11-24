@@ -6,3 +6,5 @@ DerivedData/
 *.xcworkspace/
 xcuserdata/
 perf.json
+__pycache__/
+*.pyc
