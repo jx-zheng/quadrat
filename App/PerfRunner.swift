@@ -89,7 +89,8 @@ enum PerfRunner {
             "nodeSlots": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
-            "peakRSSBytes": Int(peak),
+            "peakRSSBytes": Int(peak.footprint),
+            "peakResidentBytes": Int(peak.resident),
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
             "hardLinks": engine.hardLinkCount,
@@ -122,7 +123,8 @@ enum PerfRunner {
             "nodeSlots": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
-            "peakRSSBytes": Int(peak),
+            "peakRSSBytes": Int(peak.footprint),
+            "peakResidentBytes": Int(peak.resident),
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
             "heapInUseBytes": heapInUse(),
@@ -290,11 +292,13 @@ private final class PeakSampler {
     private var running = false
     private var finished = false
     private var peak: UInt64 = 0
+    private var peakResident: UInt64 = 0
 
     func start() {
         running = true
         finished = false
         peak = ResidentMemory.currentBytes()
+        peakResident = ResidentMemory.residentBytes()
         Thread.detachNewThread { [weak self] in
             guard let self else { return }
             while self.running {
@@ -303,6 +307,8 @@ private final class PeakSampler {
                 ResidentMemory.relieve()
                 let sample = ResidentMemory.currentBytes()
                 if sample > self.peak { self.peak = sample }
+                let resident = ResidentMemory.residentBytes()
+                if resident > self.peakResident { self.peakResident = resident }
                 Thread.sleep(forTimeInterval: 0.05)
             }
             self.condition.lock()
@@ -317,6 +323,6 @@ private final class PeakSampler {
         condition.lock()
         while !finished { condition.wait() }
         condition.unlock()
-        return max(peak, ResidentMemory.currentBytes())
+        return (footprint: max(peak, ResidentMemory.currentBytes()), resident: max(peakResident, ResidentMemory.residentBytes()))
     }
 }

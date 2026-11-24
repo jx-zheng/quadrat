@@ -4,8 +4,32 @@ import Darwin
 #endif
 
 public enum ResidentMemory {
-    /// Current physical footprint of this process, in bytes.
+    /// Physical footprint: the pages Jetsam charges this process. Purged malloc
+    /// pages stay in `resident_size` until something reuses them, so that figure
+    /// stays high after a scan even when the live tree is small.
     public static func currentBytes() -> UInt64 {
+        #if os(macOS)
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer -> kern_return_t in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        if result == KERN_SUCCESS, info.phys_footprint > 0 {
+            return UInt64(info.phys_footprint)
+        }
+        return residentBytes()
+        #else
+        guard let text = try? String(contentsOfFile: "/proc/self/statm", encoding: .utf8) else { return 0 }
+        let fields = text.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        guard fields.count >= 2, let residentPages = UInt64(fields[1]) else { return 0 }
+        return residentPages * 4096
+        #endif
+    }
+
+    /// Classic Mach resident size, including pages the kernel has already been told it can reclaim.
+    public static func residentBytes() -> UInt64 {
         #if os(macOS)
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<integer_t>.stride)
@@ -19,10 +43,7 @@ public enum ResidentMemory {
         }
         return 0
         #else
-        guard let text = try? String(contentsOfFile: "/proc/self/statm", encoding: .utf8) else { return 0 }
-        let fields = text.split(whereSeparator: { $0 == " " || $0 == "\n" })
-        guard fields.count >= 2, let residentPages = UInt64(fields[1]) else { return 0 }
-        return residentPages * 4096
+        return currentBytes()
         #endif
     }
 
@@ -56,7 +77,7 @@ public enum ResidentMemory {
     public static func relieve() {
         #if os(macOS)
         forEachZone { zone, _ in
-            _ = malloc_zone_pressure_relief(zone, 0)
+            _ = malloc_zone_pressure_relief(zone, Int.max)
         }
         #endif
     }
