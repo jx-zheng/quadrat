@@ -109,35 +109,58 @@ jobs:
           BIN="${{ steps.app.outputs.bin }}"
           MOV=/tmp/quadrat-demo/capture.mov
           OUT=/tmp/quadrat-demo/quadrat-demo.mp4
+          defaults write com.apple.dock autohide -bool true
+          killall Dock || true
+          defaults write com.apple.finder CreateDesktop -bool false
+          killall Finder || true
           if ! command -v ffmpeg >/dev/null; then
             brew install ffmpeg
           fi
           swiftc scripts/set_display.swift -o /tmp/set_display
           /tmp/set_display
-          # Record a fixed length so the capture stays up for the whole scripted demo.
-          screencapture -V 100 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          swiftc scripts/window_id.swift -o /tmp/window_id
+          "$BIN" --demo > /tmp/quadrat-demo/app.log 2>&1 &
+          APP=$!
+          WID=""
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 0.5
+            WID="$(/tmp/window_id || true)"
+            if [ -n "$WID" ]; then
+              break
+            fi
+          done
+          echo "window id: ${WID:-none}"
+          if [ -n "$WID" ]; then
+            screencapture -o -l "$WID" -V 85 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          else
+            screencapture -V 85 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          fi
           CAP=$!
-          sleep 2
-          "$BIN" --demo
+          wait "$APP" || true
+          sleep 1
+          kill -INT "$CAP" || true
           wait "$CAP" || true
           test -s "$MOV"
           wc -c "$MOV"
-          ffmpeg -y -i "$MOV" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          ffmpeg -y -i "$MOV" -r 60 -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
           python3 - <<'PY'
           import json, subprocess
           raw = subprocess.check_output([
               "ffprobe", "-v", "error", "-select_streams", "v:0",
-              "-show_entries", "stream=width,height,codec_name:format=duration",
+              "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration",
               "-of", "json", "/tmp/quadrat-demo/quadrat-demo.mp4",
           ])
           info = json.loads(raw)
           stream = info["streams"][0]
           width, height = int(stream["width"]), int(stream["height"])
           duration = float(info["format"]["duration"])
-          print(f"demo {width}x{height} {stream['codec_name']} {duration:.1f}s")
+          num, den = stream["avg_frame_rate"].split("/")
+          fps = float(num) / float(den) if float(den) else 0
+          print(f"demo {width}x{height} {stream['codec_name']} {fps:.1f}fps {duration:.1f}s")
           assert stream["codec_name"] == "h264", stream["codec_name"]
           assert width >= 1280 and height >= 800, (width, height)
-          assert 60 <= duration <= 130, duration
+          assert fps >= 30, fps
+          assert 60 <= duration <= 90, duration
           PY
 
       - name: Upload snapshots and perf

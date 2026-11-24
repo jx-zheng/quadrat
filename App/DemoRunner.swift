@@ -12,26 +12,30 @@ enum DemoRunner {
         model.phase = .picker
         model.showAccess = false
         model.showTrash = false
+        NSApp.appearance = NSAppearance(named: .aqua)
 
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            try? await Task.sleep(nanoseconds: 600_000_000)
             presentWindow()
+            // Disk picker.
             try? await Task.sleep(nanoseconds: 10_000_000_000)
+            presentWindow()
             await playScan(model)
             showMap(model)
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            presentWindow()
+            // Settled map before the pointer lands.
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             hover(model, named: "Docker.raw")
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            hover(model, named: "originals")
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             model.clearHover()
             if let developer = find(model, named: "Developer"), model.store.isDirectory(developer) {
                 model.zoom(into: developer)
             }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            hover(model, named: "Atlas-gyeunrzcfqpoti")
+            presentWindow()
+            try? await Task.sleep(nanoseconds: 16_000_000_000)
+            model.zoomOut()
+            presentWindow()
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            model.clearHover()
             if let derived = find(model, named: "DerivedData") {
                 model.selection = derived
                 model.showTrash = true
@@ -40,8 +44,6 @@ enum DemoRunner {
             model.showTrash = false
             model.selection = nil
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            model.zoomOut()
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
             NSApp.terminate(nil)
             exit(0)
         }
@@ -57,7 +59,7 @@ enum DemoRunner {
         model.viewport = CGSize(width: 1100, height: 720)
         model.rebuildPicture()
         let total = DemoDisk.used
-        let steps = 16
+        let steps = 12
         for step in 1...steps {
             let scanned = total * UInt64(step) / UInt64(steps)
             let items = 1_862_400 * step / steps
@@ -76,7 +78,7 @@ enum DemoRunner {
                 cancelled: false, usedBulkLister: true
             )
             model.rebuildPicture()
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
 
@@ -116,10 +118,20 @@ enum DemoRunner {
     }
 
     private static func presentWindow() {
+        NSApp.appearance = NSAppearance(named: .aqua)
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.canBecomeMain {
-            window.setFrame(NSRect(x: 0, y: 0, width: 1440, height: 900), display: true)
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let width = min(1600, screen.width)
+        let height = min(1000, screen.height)
+        let frame = NSRect(
+            x: screen.minX + (screen.width - width) / 2,
+            y: screen.minY + (screen.height - height) / 2,
+            width: width,
+            height: height
+        )
+        for window in NSApp.windows where window.canBecomeMain || window.isVisible {
+            window.setFrame(frame, display: true, animate: false)
             window.makeKeyAndOrderFront(nil)
         }
     }

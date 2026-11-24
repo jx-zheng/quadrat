@@ -17,8 +17,8 @@ for mode in modes {
 
 func area(_ mode: CGDisplayMode) -> Int { mode.width * mode.height }
 
-let preferred = modes.filter { $0.width == 1440 && $0.height == 900 }
-let large = modes.filter { $0.width >= 1440 && $0.height >= 900 }
+let preferred = modes.filter { $0.width == 1920 && $0.height == 1080 }
+let large = modes.filter { $0.width >= 1600 && $0.height >= 1000 }
 let minimum = modes.filter { $0.width >= 1280 && $0.height >= 800 }
 let chosen = preferred.first ?? large.max(by: { area($0) < area($1) }) ?? minimum.max(by: { area($0) < area($1) })
 
