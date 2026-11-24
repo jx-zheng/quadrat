@@ -75,7 +75,7 @@ enum PerfRunner {
         let listing = SyntheticListing(rootPath: "/synth", directories: 5_000, filesPerDirectory: 300)
         let engine = ScanEngine()
         let sampler = PeakSampler()
-        sampler.start()
+        sampler.start(relieve: false)
         let started = Date()
         let store = engine.scan(rootPath: "/synth", displayName: "Synthetic", lister: listing, rootDevice: 1)
         let seconds = Date().timeIntervalSince(started)
@@ -101,7 +101,7 @@ enum PerfRunner {
     private static func scan(path: String, displayName: String) -> Phase {
         let engine = ScanEngine()
         let sampler = PeakSampler()
-        sampler.start()
+        sampler.start(relieve: path == "/")
         let started = Date()
         var store = engine.scan(
             rootPath: path,
@@ -294,7 +294,7 @@ private final class PeakSampler {
     private var peak: UInt64 = 0
     private var peakResident: UInt64 = 0
 
-    func start() {
+    func start(relieve: Bool) {
         running = true
         finished = false
         peak = ResidentMemory.currentBytes()
@@ -304,14 +304,15 @@ private final class PeakSampler {
             var ticks = 0
             while self.running {
                 ticks += 1
-                // Purging every sample stalled the scan. Every 400 ms is enough to
-                // keep reclaimed pages from sticking in the resident set.
-                if ticks.isMultiple(of: 8) {
+                // Purging on the directory benchmark stalled it. The root scan still
+                // returns caches a few times a second so its resident size stays put.
+                let purge = relieve && ticks.isMultiple(of: 8)
+                if purge {
                     ResidentMemory.relieve()
                 }
                 let sample = ResidentMemory.currentBytes()
                 if sample > self.peak { self.peak = sample }
-                if ticks.isMultiple(of: 8) {
+                if !relieve || purge {
                     let resident = ResidentMemory.residentBytes()
                     if resident > self.peakResident { self.peakResident = resident }
                 }
