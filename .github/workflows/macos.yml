@@ -1,14 +1,15 @@
 name: macos
 
 on:
-  push:
+  pull_request:
     paths:
       - "App/**"
       - "Packages/**"
       - "project.yml"
       - "scripts/**"
       - ".github/workflows/macos.yml"
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "App/**"
       - "Packages/**"

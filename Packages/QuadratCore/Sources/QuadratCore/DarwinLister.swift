@@ -19,19 +19,21 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
 
         var attr = attrlist()
         memset(&attr, 0, MemoryLayout<attrlist>.size)
-        attr.bitmapcount = ATTR_BIT_MAP_COUNT
-        attr.commonattr = ATTR_CMN_RETURNED_ATTRS
-            | ATTR_CMN_NAME
-            | ATTR_CMN_DEVID
-            | ATTR_CMN_OBJTYPE
-            | ATTR_CMN_FILEID
-            | ATTR_CMN_FLAGS
-            | ATTR_CMN_ERROR
-        attr.dirattr = ATTR_DIR_MOUNTSTATUS
-        attr.fileattr = ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE
+        attr.bitmapcount = u_short(truncatingIfNeeded: ATTR_BIT_MAP_COUNT)
+        attr.commonattr = Self.group(ATTR_CMN_RETURNED_ATTRS)
+            | Self.group(ATTR_CMN_NAME)
+            | Self.group(ATTR_CMN_DEVID)
+            | Self.group(ATTR_CMN_OBJTYPE)
+            | Self.group(ATTR_CMN_FILEID)
+            | Self.group(ATTR_CMN_FLAGS)
+            | Self.group(ATTR_CMN_ERROR)
+        attr.dirattr = Self.group(ATTR_DIR_MOUNTSTATUS)
+        attr.fileattr = Self.group(ATTR_FILE_LINKCOUNT)
+            | Self.group(ATTR_FILE_TOTALSIZE)
+            | Self.group(ATTR_FILE_ALLOCSIZE)
 
         var buffer = [UInt8](repeating: 0, count: 256 * 1024)
-        let options = UInt64(FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS)
+        let options = UInt64(truncatingIfNeeded: FSOPT_NOFOLLOW) | UInt64(truncatingIfNeeded: FSOPT_PACK_INVAL_ATTRS)
         var entries: [ListedEntry] = []
 
         while true {
@@ -57,13 +59,19 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     public static func cloneProbe(path: String) -> (shares: Bool, privateBytes: UInt64)? {
         var attr = attrlist()
         memset(&attr, 0, MemoryLayout<attrlist>.size)
-        attr.bitmapcount = ATTR_BIT_MAP_COUNT
-        attr.commonattr = ATTR_CMNEXT_PRIVATESIZE | ATTR_CMNEXT_EXT_FLAGS
+        attr.bitmapcount = u_short(truncatingIfNeeded: ATTR_BIT_MAP_COUNT)
+        attr.commonattr = Self.group(ATTR_CMNEXT_PRIVATESIZE) | Self.group(ATTR_CMNEXT_EXT_FLAGS)
         var buffer = [UInt8](repeating: 0, count: 64)
         let rc: Int32 = buffer.withUnsafeMutableBytes { raw in
             guard let base = raw.baseAddress else { return -1 }
             return path.withCString { cPath in
-                getattrlist(cPath, &attr, base, raw.count, UInt32(FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED))
+                getattrlist(
+                    cPath,
+                    &attr,
+                    base,
+                    raw.count,
+                    UInt32(truncatingIfNeeded: FSOPT_NOFOLLOW) | UInt32(truncatingIfNeeded: FSOPT_ATTR_CMN_EXTENDED)
+                )
             }
         }
         if rc != 0 { return nil }
@@ -125,10 +133,11 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             let allocSize = take64()
 
             if name != "." && name != ".." && !name.isEmpty {
-                let isDir = objType == UInt32(VDIR)
-                let isLink = objType == UInt32(VLNK)
+                let isDir = objType == VDIR.rawValue
+                let isLink = objType == VLNK.rawValue
                 let device = UInt64(devid)
-                let mount = isDir && ((mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT)) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
+                let mountBit = UInt32(truncatingIfNeeded: DIR_MNTSTATUS_MNTPOINT)
+                let mount = isDir && ((mountStatus & mountBit) != 0 || (rootDevice != 0 && device != rootDevice && devid != 0))
                 let denied = error == UInt32(EACCES) || error == UInt32(EPERM)
                 entries.append(ListedEntry(
                     name: name,
@@ -147,6 +156,11 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             cursor += max(aligned, 8)
         }
         return true
+    }
+
+    /// Darwin imports some `ATTR_*` constants as `Int32` and others as `UInt32`.
+    private static func group<T: BinaryInteger>(_ value: T) -> attrgroup_t {
+        attrgroup_t(truncatingIfNeeded: value)
     }
 
     private static func looksCorrupt(_ entries: [ListedEntry]) -> Bool {

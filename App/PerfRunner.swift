@@ -80,8 +80,8 @@ enum PerfRunner {
             "nodes": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
-            "peakRSSBytes": peak,
-            "rssAfterBytes": ResidentMemory.currentBytes(),
+            "peakRSSBytes": Int(peak),
+            "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
             "inaccessible": stats.inaccessible
         ], store: store)
@@ -111,8 +111,8 @@ enum PerfRunner {
             "nodes": store.nodeCount,
             "seconds": seconds,
             "itemsPerSecond": seconds > 0 ? Double(stats.items) / seconds : 0,
-            "peakRSSBytes": peak,
-            "rssAfterBytes": ResidentMemory.currentBytes(),
+            "peakRSSBytes": Int(peak),
+            "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
             "inaccessible": stats.inaccessible,
             "usedBulkLister": stats.usedBulkLister
@@ -129,7 +129,7 @@ enum PerfRunner {
             "seconds": seconds,
             "cpuSeconds": cpu,
             "cpuPercent": percent,
-            "rssBytes": ResidentMemory.currentBytes(),
+            "rssBytes": Int(ResidentMemory.currentBytes()),
             "method": "getrusage RUSAGE_SELF over a sleep with no timers"
         ]
     }
