@@ -247,9 +247,10 @@ enum SnapshotRunner {
             ) else { return false }
             rep.size = NSSize(width: 1440, height: 900)
             host.cacheDisplay(in: points, to: rep)
-            // Drop the window backing before the PNG buffer is allocated.
+            // One release only. close() would free the window, and the pool would free it again.
+            window.isReleasedWhenClosed = false
             window.contentView = nil
-            window.close()
+            window.orderOut(nil)
             guard let data = rep.representation(using: .png, properties: [:]) else { return false }
             do {
                 try data.write(to: url)

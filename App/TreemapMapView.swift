@@ -4,8 +4,8 @@ import QuadratCore
 import QuartzCore
 import SwiftUI
 
-/// Tiles live in one layer contents image. Hover only moves a highlight layer,
-/// so a mouse move does not redraw the window or upload the bitmap again.
+/// Each tile is its own layer: a rounded rect fill, optional vector hatch, and a text layer.
+/// Hover only moves the highlight layer. Nothing here assigns a contents image.
 final class TreemapMapView: NSView {
     static let signposter = OSSignposter(subsystem: "com.kevinzheng.quadrat", category: "treemap")
 
@@ -31,7 +31,6 @@ final class TreemapMapView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.isGeometryFlipped = true
-        tilesLayer.contentsGravity = .resize
         highlightLayer.borderWidth = 2
         highlightLayer.borderColor = NSColor.black.withAlphaComponent(0.9).cgColor
         highlightLayer.cornerRadius = 3
@@ -157,9 +156,12 @@ final class TreemapMapView: NSView {
                 box.backgroundColor = NSColor(calibratedRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1).cgColor
                 box.cornerRadius = min(5, max(2, min(rect.width, rect.height) / 4))
                 box.contents = nil
+                box.contentsScale = scale
+                box.shouldRasterize = false
+                box.masksToBounds = true
                 box.sublayers?.filter { $0.name == "hatch" }.forEach { $0.removeFromSuperlayer() }
                 if tile.hatched {
-                    addHatch(to: box, size: rect.size)
+                    addHatch(to: box, size: rect.size, scale: scale)
                 }
                 if tile.header > 1, tile.showsLabel {
                     band.isHidden = false
@@ -183,12 +185,14 @@ final class TreemapMapView: NSView {
         CATransaction.commit()
     }
 
-    private func addHatch(to box: CALayer, size: CGSize) {
+    private func addHatch(to box: CALayer, size: CGSize, scale: CGFloat) {
         let spacing: CGFloat = 8
         var x = -size.height
         while x < size.width {
             let line = CAShapeLayer()
             line.name = "hatch"
+            line.contentsScale = scale
+            line.shouldRasterize = false
             let path = CGMutablePath()
             path.move(to: CGPoint(x: x, y: size.height))
             path.addLine(to: CGPoint(x: x + size.height, y: 0))
@@ -208,6 +212,7 @@ final class TreemapMapView: NSView {
         while tileLayers.count < count {
             let box = CALayer()
             box.contentsScale = scale
+            box.shouldRasterize = false
             let label = CATextLayer()
             label.contentsScale = scale
             label.fontSize = 12
