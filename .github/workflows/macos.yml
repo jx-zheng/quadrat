@@ -181,9 +181,10 @@ jobs:
           fi
           CAP=$!
           wait "$APP" || true
-          sleep 1
-          pkill -INT screencapture || true
+          # Let screencapture finish the file. Trailing black is cut below.
           wait "$CAP" || true
+          echo "--- screencapture log ---"
+          cat /tmp/quadrat-demo/screencapture.log || true
           test -s "$MOV"
           wc -c "$MOV"
           # Drop the black frames left after the window closes. The script already
