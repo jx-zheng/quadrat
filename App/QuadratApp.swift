@@ -52,6 +52,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
+        if let path = argument("--snapshot-path", in: args), let out = argument("--snapshot-out", in: args) {
+            let scheme: ColorScheme = argument("--snapshot-scheme", in: args) == "dark" ? .dark : .light
+            SnapshotRunner.render(path: path, to: out, scheme: scheme)
+            exit(0)
+        }
+        if let path = argument("--perf-path", in: args) {
+            PerfRunner.runPath(directory: path, arguments: args)
+            exit(0)
+        }
         if let index = args.firstIndex(of: "--snapshot"), index + 1 < args.count {
             SnapshotRunner.render(into: args[index + 1])
             exit(0)
@@ -65,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         model.refreshVolumes()
+    }
+
+    private func argument(_ flag: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

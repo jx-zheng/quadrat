@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published var selection: UInt32?
     @Published var hover: UInt32?
     @Published var hoverPoint: CGPoint = .zero
+    private var hoverQueued = false
+    private var queuedHover: CGPoint?
     @Published var showTrash = false
     @Published var trashError: String?
     @Published var searchText = ""
@@ -208,13 +210,28 @@ final class AppModel: ObservableObject {
     }
 
     func hover(at point: CGPoint) {
-        hoverPoint = point
-        let id = hit(point)
-        hover = (id == nil || id == zoomID) ? nil : id
+        queuedHover = point
+        if hoverQueued { return }
+        hoverQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hoverQueued = false
+            guard let point = self.queuedHover else { return }
+            self.queuedHover = nil
+            self.applyHover(point)
+        }
     }
 
     func clearHover() {
-        hover = nil
+        queuedHover = nil
+        if hover != nil { hover = nil }
+    }
+
+    private func applyHover(_ point: CGPoint) {
+        hoverPoint = point
+        let id = hit(point)
+        let next: UInt32? = (id == nil || id == zoomID) ? nil : id
+        if next != hover { hover = next }
     }
 
     func zoom(into id: UInt32) {
@@ -328,6 +345,7 @@ final class AppModel: ObservableObject {
     }
 
     func canTrash(_ id: UInt32) -> Bool {
+        if TileFold.isRemainder(id) { return false }
         let flags = store.flags(id)
         if flags.contains(.hatched) || flags.contains(.mountPoint) || id == store.rootID { return false }
         return url(for: id) != nil
@@ -385,7 +403,14 @@ final class AppModel: ObservableObject {
     }
 
     func nodeBytes(_ id: UInt32) -> UInt64 {
-        store.bytes(id, metric)
+        if let tile = picture.tiles.first(where: { $0.id == id }) { return tile.bytes }
+        return store.bytes(id, metric)
+    }
+
+    func displayName(of id: UInt32) -> String {
+        if let tile = picture.tiles.first(where: { $0.id == id }), !tile.name.isEmpty { return tile.name }
+        if TileFold.isRemainder(id) { return "smaller items" }
+        return store.name(of: id)
     }
 
     func installKeyMonitor() {

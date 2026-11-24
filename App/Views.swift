@@ -532,7 +532,7 @@ struct WorkspaceView: View {
     private var treemapAccessLabel: String {
         let title = model.store.rootID == 0 ? "Treemap" : model.store.name(of: model.zoomID)
         if let hover = model.hover {
-            return "\(title). \(model.store.name(of: hover)), \(ByteFormat.bytes(model.nodeBytes(hover)))"
+            return "\(title). \(model.displayName(of: hover)), \(ByteFormat.bytes(model.nodeBytes(hover)))"
         }
         return "Treemap of \(title). Click a folder to zoom."
     }
@@ -585,7 +585,7 @@ struct WorkspaceView: View {
                 Image(systemName: model.store.isDirectory(id) ? "folder.fill" : "doc.fill")
                     .foregroundStyle(QuadratTheme.kind(model.store.kind(id), scheme))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("\(model.store.name(of: id))  \(ByteFormat.bytes(model.nodeBytes(id))) · \(ByteFormat.percent(model.nodeBytes(id), of: model.activeVolume?.capacity ?? model.nodeBytes(model.store.rootID))) of disk · \(itemPhrase(id))")
+                    Text("\(model.displayName(of: id))  \(ByteFormat.bytes(model.nodeBytes(id))) · \(ByteFormat.percent(model.nodeBytes(id), of: model.activeVolume?.capacity ?? model.nodeBytes(model.store.rootID))) of disk · \(itemPhrase(id))")
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Text(model.path(of: id))
@@ -644,15 +644,17 @@ struct TreemapCanvas: View, Equatable {
                         var clip = context
                         clip.clip(to: path)
                         drawHatch(clip, rect: rect, color: Color.white.opacity(scheme == .dark ? 0.18 : 0.28))
+                    } else if tile.isDepthCapped {
+                        drawDepthHint(context, rect: rect, path: path, scheme: scheme)
                     }
                 }
+                guard tile.showsLabel else { continue }
                 let label = LabelPlacement.frame(
                     tileX: tile.x, tileY: tile.y, tileWidth: tile.width, tileHeight: tile.height, header: tile.header
                 )
-                guard tile.showsLabel, label.visible else { continue }
-                let name = fit(tile.name, width: label.width)
+                let name = tile.name
                 if name.isEmpty { continue }
-                let band = CGRect(x: label.x, y: label.y, width: label.width, height: label.height)
+                let band = CGRect(x: label.x, y: label.y, width: label.width, height: max(label.height, tile.header > 0 ? tile.header - 2 : 28))
                 context.drawLayer { layer in
                     layer.clip(to: Path(roundedRect: rect, cornerRadius: radius))
                     layer.clip(to: Path(band))
@@ -674,11 +676,31 @@ struct TreemapCanvas: View, Equatable {
         }
     }
 
-    private func fit(_ text: String, width: Double) -> String {
-        let maxChars = max(0, Int(width / 6.6))
-        guard maxChars > 1 else { return "" }
-        if text.count <= maxChars { return text }
-        return String(text.prefix(maxChars - 1)) + "…"
+    private func drawDepthHint(_ context: GraphicsContext, rect: CGRect, path: Path, scheme: ColorScheme) {
+        guard rect.width >= 56, rect.height >= 40 else { return }
+        var clip = context
+        clip.clip(to: path)
+        let insetX = min(12, rect.width * 0.1)
+        let insetY = min(12, rect.height * 0.14)
+        let inner = rect.insetBy(dx: insetX, dy: insetY)
+        guard inner.width > 12, inner.height > 10 else { return }
+        let columns = inner.width > inner.height * 1.3 ? 3 : 2
+        let rows = 2
+        let gap = 3.0
+        let blockW = (inner.width - gap * Double(columns - 1)) / Double(columns)
+        let blockH = (inner.height - gap * Double(rows - 1)) / Double(rows)
+        let tint = Color.white.opacity(scheme == .dark ? 0.14 : 0.32)
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let block = CGRect(
+                    x: inner.minX + Double(column) * (blockW + gap),
+                    y: inner.minY + Double(row) * (blockH + gap),
+                    width: blockW,
+                    height: blockH
+                )
+                clip.fill(Path(roundedRect: block, cornerRadius: 2), with: .color(tint))
+            }
+        }
     }
 
     private func drawHatch(_ context: GraphicsContext, rect: CGRect, color: Color) {
@@ -752,10 +774,10 @@ struct TooltipCard: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Circle().fill(QuadratTheme.kind(model.store.kind(id), scheme)).frame(width: 8, height: 8)
-                Text(model.store.name(of: id))
+                Text(model.displayName(of: id))
                     .font(.system(size: 13, weight: .semibold))
             }
-            Text(model.path(of: id))
+            Text(TileFold.isRemainder(id) ? "Items too small to draw on their own" : model.path(of: id))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -781,6 +803,9 @@ struct TooltipCard: View {
     }
 
     private func detail(_ flags: NodeFlags) -> String {
+        if TileFold.isRemainder(id) {
+            return "\(model.displayName(of: id)) · folded together"
+        }
         if model.store.isDirectory(id) {
             let items = ByteFormat.grouped(UInt64(model.store.itemCount[Int(id)]))
             let bound = flags.contains(.lowerBound) ? "≥ " : ""

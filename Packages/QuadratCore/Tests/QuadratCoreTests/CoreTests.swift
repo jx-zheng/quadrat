@@ -308,6 +308,175 @@ final class HitTestTests: XCTestCase {
     }
 }
 
+final class LayoutPolicyTests: XCTestCase {
+    func testVisibleDepthIsCappedAtTwoAndCanReachThree() {
+        let store = branchedStore()
+        let shallow = TreemapLayout.build(
+            store: store.store, rootID: store.root, width: 800, height: 600,
+            options: TreemapOptions(gap: 0, maxVisibleDepth: 2, minTileWidth: 40, minTileHeight: 24)
+        )
+        XCTAssertFalse(shallow.nodes.contains { $0.depth > 2 })
+        XCTAssertTrue(shallow.nodes.contains { $0.id == store.mid && $0.isDepthCapped })
+        XCTAssertFalse(shallow.nodes.contains { $0.id == store.deep })
+        XCTAssertFalse(shallow.nodes.contains { $0.id == store.deeper })
+
+        let deeper = TreemapLayout.build(
+            store: store.store, rootID: store.root, width: 800, height: 600,
+            options: TreemapOptions(gap: 0, maxVisibleDepth: 3, minTileWidth: 40, minTileHeight: 24)
+        )
+        XCTAssertFalse(deeper.nodes.contains { $0.depth > 3 })
+        // deep has a single directory child, so the capped tile is that leaf, not another row of headers.
+        XCTAssertTrue(deeper.nodes.contains { $0.id == store.deeper && $0.isDepthCapped && $0.headerTitle == "deep / deeper" })
+        XCTAssertFalse(deeper.nodes.contains { $0.id == store.deep })
+        XCTAssertFalse(deeper.nodes.contains { store.store.name(of: $0.id) == "x" })
+        XCTAssertEqual(TreemapOptions(maxVisibleDepth: 9).maxVisibleDepth, 3)
+        XCTAssertEqual(TreemapOptions(maxVisibleDepth: 0).maxVisibleDepth, 1)
+    }
+
+    func testTilesUnder40By24FoldIntoOneRemainder() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        let folder = store.addNode(parent: root, name: "Photos", allocBytes: 0, logicalBytes: 0, kind: .photos, flags: .directory)
+        _ = store.addNode(parent: folder, name: "huge", allocBytes: 80_000_000_000, logicalBytes: 80_000_000_000, kind: .photos, flags: [])
+        for index in 0..<40 {
+            _ = store.addNode(parent: folder, name: "tiny-\(index)", allocBytes: 4096, logicalBytes: 4096, kind: .photos, flags: [])
+        }
+        _ = store.addNode(parent: root, name: "other", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .other, flags: [])
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 900, height: 600,
+            options: TreemapOptions(gap: 2, maxVisibleDepth: 2, minTileWidth: 40, minTileHeight: 24)
+        )
+        let remainder = layout.nodes.filter(\.isRemainder)
+        XCTAssertEqual(remainder.count, 1)
+        XCTAssertGreaterThanOrEqual(remainder[0].foldedCount, 40)
+        for node in layout.nodes where node.depth >= 2 {
+            XCTAssertGreaterThanOrEqual(node.width, 40, "width \(node.width) id \(node.id)")
+            XCTAssertGreaterThanOrEqual(node.height, 24, "height \(node.height) id \(node.id)")
+        }
+    }
+
+    func testLabelsRequireTheFullNameAndSize() {
+        XCTAssertFalse(LabelFit.fits(name: "Application Support", sizeText: "12.4 GB", tileWidth: 52, tileHeight: 28, header: 0))
+        XCTAssertTrue(LabelFit.fits(name: "Mail", sizeText: "4.2 GB", tileWidth: 220, tileHeight: 80, header: 0))
+        XCTAssertTrue(LabelFit.fits(name: "Users / jxzheng / Library", sizeText: "52.3 GB", tileWidth: 520, tileHeight: 90, header: 19))
+        XCTAssertFalse(LabelFit.fits(name: "Users / jxzheng / Library", sizeText: "52.3 GB", tileWidth: 80, tileHeight: 40, header: 19))
+
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        for index in 0..<6 {
+            _ = store.addNode(
+                parent: root,
+                name: "Application Support \(index)",
+                allocBytes: 8_000_000_000,
+                logicalBytes: 8_000_000_000,
+                kind: .other,
+                flags: []
+            )
+        }
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 180, height: 80,
+            options: TreemapOptions(gap: 2, maxVisibleDepth: 2, minTileWidth: 20, minTileHeight: 16)
+        )
+        let labelled = layout.nodes.filter { $0.depth > 0 && $0.showsLabel }
+        XCTAssertTrue(labelled.isEmpty, "cramped tiles must not keep a fragment of the name")
+    }
+
+    func testSingleChildChainsCollapseToABreadcrumb() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let person = store.addNode(parent: users, name: "jxzheng", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let library = store.addNode(parent: person, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        _ = store.addNode(parent: library, name: "Mail", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .other, flags: [])
+        _ = store.addNode(parent: library, name: "Messages", allocBytes: 22_000_000_000, logicalBytes: 22_000_000_000, kind: .caches, flags: [])
+        _ = store.addNode(parent: root, name: "Applications", allocBytes: 12_000_000_000, logicalBytes: 12_000_000_000, kind: .apps, flags: [])
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 800, height: 500,
+            options: TreemapOptions(gap: 0, maxVisibleDepth: 2, minTileWidth: 40, minTileHeight: 24)
+        )
+        let chain = layout.nodes.filter { $0.headerTitle == "Users / jxzheng / Library" }
+        XCTAssertEqual(chain.count, 1)
+        XCTAssertEqual(chain[0].id, library)
+        XCTAssertEqual(chain[0].depth, 1)
+        XCTAssertFalse(layout.nodes.contains { $0.id == users })
+        XCTAssertFalse(layout.nodes.contains { $0.id == person })
+        let children = layout.children(of: layout.nodes.firstIndex(where: { $0.id == library }) ?? 0)
+        XCTAssertEqual(children.count, 2)
+    }
+
+    func testSpatialIndexMatchesTheSmallestContainingTile() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        let docs = store.addNode(parent: root, name: "Documents", allocBytes: 0, logicalBytes: 0, kind: .documents, flags: .directory)
+        let notes = store.addNode(parent: docs, name: "Notes.pdf", allocBytes: 40_000_000_000, logicalBytes: 40_000_000_000, kind: .documents, flags: [])
+        let movie = store.addNode(parent: root, name: "Movie.mov", allocBytes: 10_000_000_000, logicalBytes: 10_000_000_000, kind: .media, flags: [])
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 400, height: 300,
+            options: TreemapOptions(gap: 0, maxHeaderDepth: 4, maxVisibleDepth: 2)
+        )
+        XCTAssertGreaterThan(layout.index.columns, 0)
+        for gy in 0..<24 {
+            for gx in 0..<32 {
+                let x = (Double(gx) + 0.5) / 32 * 400
+                let y = (Double(gy) + 0.5) / 24 * 300
+                XCTAssertEqual(HitTest.hit(layout, x: x, y: y), brute(layout, x, y), "at \(x), \(y)")
+            }
+        }
+        if let notesNode = layout.nodes.first(where: { $0.id == notes }) {
+            let hit = HitTest.hit(layout, x: notesNode.x + notesNode.width / 2, y: notesNode.y + notesNode.height / 2)
+            XCTAssertEqual(hit, notes)
+        } else {
+            XCTFail("notes tile missing")
+        }
+        XCTAssertNotNil(layout.nodes.first { $0.id == movie })
+        XCTAssertNil(HitTest.hit(layout, x: -4, y: 10))
+        XCTAssertNil(HitTest.hit(layout, x: 10, y: 400))
+    }
+
+    private func brute(_ layout: TreemapLayout, _ x: Double, _ y: Double) -> UInt32? {
+        guard layout.nodes.indices.contains(layout.root), layout.nodes[layout.root].contains(x, y) else { return nil }
+        var best = layout.root
+        var bestArea = layout.nodes[layout.root].width * layout.nodes[layout.root].height
+        for index in layout.nodes.indices where index != layout.root {
+            let node = layout.nodes[index]
+            guard node.contains(x, y) else { continue }
+            let area = node.width * node.height
+            if area < bestArea {
+                bestArea = area
+                best = index
+            }
+        }
+        return layout.nodes[best].id
+    }
+
+    private struct Branched {
+        var store: NodeStore
+        var root: UInt32
+        var mid: UInt32
+        var deep: UInt32
+        var deeper: UInt32
+    }
+
+    private func branchedStore() -> Branched {
+        var store = NodeStore()
+        let root = store.addRoot(name: "disk")
+        let top = store.addNode(parent: root, name: "top", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let mid = store.addNode(parent: top, name: "mid", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let deep = store.addNode(parent: mid, name: "deep", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let deeper = store.addNode(parent: deep, name: "deeper", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        _ = store.addNode(parent: deeper, name: "x", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .other, flags: [])
+        _ = store.addNode(parent: top, name: "sibling", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .other, flags: [])
+        _ = store.addNode(parent: mid, name: "side", allocBytes: 12_000_000_000, logicalBytes: 12_000_000_000, kind: .other, flags: [])
+        _ = store.addNode(parent: root, name: "other", allocBytes: 8_000_000_000, logicalBytes: 8_000_000_000, kind: .other, flags: [])
+        store.recomputeAll()
+        return Branched(store: store, root: root, mid: mid, deep: deep, deeper: deeper)
+    }
+}
+
 final class POSIXScanTests: XCTestCase {
     func testDoesNotFollowSymlinksAndSumsFiles() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("quadrat-posix-\(UUID().uuidString)")

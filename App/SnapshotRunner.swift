@@ -32,6 +32,52 @@ enum SnapshotRunner {
         }
     }
 
+    /// Scan a real directory and write the main window at 1440×900 pt, @2x.
+    static func render(path: String, to out: String, scheme: ColorScheme) {
+        let engine = ScanEngine(workerCount: 8)
+        let store = engine.scan(
+            rootPath: path,
+            displayName: URL(fileURLWithPath: path).lastPathComponent,
+            lister: BulkDirectoryListing(),
+            fallback: POSIXListing()
+        )
+        let model = AppModel()
+        model.store = store
+        model.phase = .map
+        model.displayRoot = path
+        model.homePrefix = path
+        model.drawsTrafficLights = true
+        model.viewport = CGSize(width: 1000, height: 760)
+        let bytes = store.bytes(store.rootID, .allocated)
+        model.activeVolume = DiskVolume(
+            id: path,
+            name: URL(fileURLWithPath: path).lastPathComponent,
+            detail: "Folder",
+            symbol: "folder",
+            capacity: max(bytes, 1),
+            available: 0,
+            purgeable: 0,
+            isNetwork: false,
+            isStartup: false,
+            isRemovable: false,
+            lastScanned: Date(),
+            snapshotCount: 0
+        )
+        model.volumes = [model.activeVolume].compactMap { $0 }
+        model.selectedVolumeID = path
+        model.rebuildPicture()
+        NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        let view = RootView(model: model)
+            .frame(width: 1440, height: 900)
+            .environment(\.colorScheme, scheme)
+        let url = URL(fileURLWithPath: out)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !write(view, to: url) {
+            FileHandle.standardError.write(Data("failed to render \(out)\n".utf8))
+            exit(1)
+        }
+    }
+
     private static func write<V: View>(_ view: V, to url: URL) -> Bool {
         let host = NSHostingView(rootView: view)
         let points = NSRect(x: 0, y: 0, width: 1440, height: 900)

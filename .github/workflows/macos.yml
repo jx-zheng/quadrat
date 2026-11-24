@@ -8,14 +8,6 @@ on:
       - "project.yml"
       - "scripts/**"
       - ".github/workflows/macos.yml"
-  push:
-    branches: [main]
-    paths:
-      - "App/**"
-      - "Packages/**"
-      - "project.yml"
-      - "scripts/**"
-      - ".github/workflows/macos.yml"
 
 concurrency:
   group: macos-${{ github.workflow }}-${{ github.ref }}
@@ -101,6 +93,25 @@ jobs:
             exit 1
           fi
 
+      - name: Messy tree
+        run: python3 scripts/messy_tree.py /tmp/quadrat-messy
+
+      - name: Messy perf and snapshots
+        run: |
+          "${{ steps.app.outputs.bin }}" \
+            --perf-path /tmp/quadrat-messy \
+            --out /tmp/quadrat-messy/perf.json
+          python3 scripts/check_messy_perf.py /tmp/quadrat-messy/perf.json
+          "${{ steps.app.outputs.bin }}" \
+            --snapshot-path /tmp/quadrat-messy \
+            --snapshot-out /tmp/quadrat-messy/messy-light.png \
+            --snapshot-scheme light
+          "${{ steps.app.outputs.bin }}" \
+            --snapshot-path /tmp/quadrat-messy \
+            --snapshot-out /tmp/quadrat-messy/messy-dark.png \
+            --snapshot-scheme dark
+          rm -rf /tmp/quadrat-messy/Users /tmp/quadrat-messy/Applications
+
       - name: Upload snapshots and perf
         uses: actions/upload-artifact@v4
         with:
@@ -109,6 +120,16 @@ jobs:
             /tmp/quadrat-snapshots/
             /tmp/quadrat-perf/perf.json
             /tmp/quadrat-leaks/leaks.txt
+          if-no-files-found: error
+
+      - name: Upload messy fixture snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-messy
+          path: |
+            /tmp/quadrat-messy/perf.json
+            /tmp/quadrat-messy/messy-light.png
+            /tmp/quadrat-messy/messy-dark.png
           if-no-files-found: error
 
   demo:

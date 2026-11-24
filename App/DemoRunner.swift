@@ -26,11 +26,11 @@ enum DemoRunner {
             presentWindow()
             // Settled map before the pointer lands.
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            hover(model, named: "Docker.raw")
+            hover(model, named: "Documents")
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             model.clearHover()
-            if let developer = find(model, named: "Developer"), model.store.isDirectory(developer) {
-                model.zoom(into: developer)
+            if let xcode = find(model, named: "Xcode"), model.store.isDirectory(xcode) {
+                model.zoom(into: xcode)
             }
             presentWindow()
             try? await Task.sleep(nanoseconds: 16_000_000_000)
@@ -107,9 +107,14 @@ enum DemoRunner {
     }
 
     private static func hover(_ model: AppModel, named name: String) {
-        guard let id = find(model, named: name) else { return }
         model.selection = nil
-        model.hover = id
+        if let tile = model.picture.tiles.first(where: { $0.name == name || $0.name.hasSuffix(name) }) {
+            model.hover = tile.id
+            return
+        }
+        if let tile = model.picture.tiles.filter({ !$0.hasChildren && !$0.isRemainder }).max(by: { $0.width * $0.height < $1.width * $1.height }) {
+            model.hover = tile.id
+        }
     }
 
     private static func find(_ model: AppModel, named name: String) -> UInt32? {

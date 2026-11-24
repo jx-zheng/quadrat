@@ -73,6 +73,48 @@ enum PerfRunner {
         }
     }
 
+    /// Scan one folder and time hover, zoom, and layout. No synthetic tree and no `/` scan.
+    static func runPath(directory: String, arguments: [String]) {
+        let out = value(after: "--out", in: arguments)
+        let displayName = URL(fileURLWithPath: directory).lastPathComponent
+        let firstJSON: [String: Any] = {
+            let phase = scan(path: directory, displayName: displayName)
+            return phase.json
+        }()
+        ResidentMemory.relieve()
+        let second = scan(path: directory, displayName: displayName)
+        let firstRate = firstJSON["itemsPerSecond"] as? Double ?? 0
+        let secondRate = second.json["itemsPerSecond"] as? Double ?? 0
+        let footprint = max(firstJSON["peakRSSBytes"] as? Int ?? 0, second.json["peakRSSBytes"] as? Int ?? 0)
+        let resident = max(firstJSON["peakResidentBytes"] as? Int ?? 0, second.json["peakResidentBytes"] as? Int ?? 0)
+        let heldFootprint = max(footprint, Int(ResidentMemory.currentBytes()))
+        let heldResident = max(resident, Int(ResidentMemory.residentBytes()))
+        var scanJSON = firstRate >= secondRate ? firstJSON : second.json
+        scanJSON["peakRSSBytes"] = heldFootprint
+        scanJSON["peakResidentBytes"] = heldResident
+        scanJSON["passes"] = 2
+        let frames = RenderBench.measureInteraction(store: second.store)
+        let report: [String: Any] = [
+            "scan": scanJSON,
+            "peakRSSBytes": heldFootprint,
+            "peakResidentBytes": heldResident,
+            "hoverP99Ms": frames.hoverP99Ms,
+            "hoverSamples": frames.hoverSamples,
+            "zoomP99Ms": frames.zoomP99Ms,
+            "zoomSamples": frames.zoomSamples,
+            "layoutMs": frames.layoutMs
+        ]
+        let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        if let out {
+            let url = URL(fileURLWithPath: out)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data?.write(to: url)
+        }
+        if let data, let text = String(data: data, encoding: .utf8) {
+            FileHandle.standardOutput.write(Data(text.utf8))
+        }
+    }
+
     private struct Phase {
         var json: [String: Any]
         var store: NodeStore
@@ -184,22 +226,34 @@ enum RenderBench {
         var zoomP99Ms: Double
         var hoverSamples: Int
         var zoomSamples: Int
+        var layoutMs: Double = 0
     }
 
     static func measure(store: NodeStore) -> Result {
-        let hoverSamples = 40
-        let zoomSamples = 20
-        var model = MapPicture.make(
+        measureInteraction(store: store, hoverSamples: 40, zoomSamples: 20, width: 1200, height: 740)
+    }
+
+    /// Hover samples include the spatial hit-test and a flush of only the highlight.
+    static func measureInteraction(
+        store: NodeStore,
+        hoverSamples: Int = 525,
+        zoomSamples: Int = 40,
+        width: Double = 1200,
+        height: Double = 740
+    ) -> Result {
+        let layoutStarted = CACurrentMediaTime()
+        let model = MapPicture.make(
             store: store,
             root: store.rootID,
-            width: 1200,
-            height: 740,
+            width: width,
+            height: height,
             metric: .allocated,
             scanned: nil,
             volumeUsed: nil,
             zoomed: false
         )
-        let view = TreemapRenderView(frame: NSRect(x: 0, y: 0, width: 1200, height: 740))
+        let layoutMs = (CACurrentMediaTime() - layoutStarted) * 1000
+        let view = TreemapRenderView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         view.tiles = model.tiles
         let window = NSWindow(
             contentRect: view.frame,
@@ -212,52 +266,67 @@ enum RenderBench {
         view.display()
         CATransaction.flush()
 
-        var hoverTimes: [Double] = []
-        hoverTimes.reserveCapacity(hoverSamples)
-        let hoverTargets = model.tiles.filter { $0.depth == 1 }
-        for sample in 0..<hoverSamples {
-            if hoverTargets.isEmpty {
-                view.hover = nil
-            } else {
-                let tile = hoverTargets[sample % hoverTargets.count]
-                view.hover = CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
+        var rects: [UInt32: CGRect] = [:]
+        rects.reserveCapacity(model.tiles.count)
+        for tile in model.tiles {
+            rects[tile.id] = CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
+        }
+        let index = model.layout.index
+        let nodes = model.layout.nodes
+        var points: [CGPoint] = []
+        let columns = 25
+        let rows = 21
+        points.reserveCapacity(columns * rows)
+        for row in 0..<rows {
+            for column in 0..<columns {
+                points.append(CGPoint(
+                    x: (Double(column) + 0.5) / Double(columns) * width,
+                    y: (Double(row) + 0.5) / Double(rows) * height
+                ))
             }
+        }
+        var hoverTimes: [Double] = []
+        let samples = hoverSamples
+        hoverTimes.reserveCapacity(samples)
+        for sample in 0..<samples {
+            let point = points[sample % points.count]
             let start = CACurrentMediaTime()
-            view.needsDisplay = true
+            let id = index.hit(nodes: nodes, x: point.x, y: point.y)
+            view.setHover(id.flatMap { rects[$0] })
             view.display()
             CATransaction.flush()
             hoverTimes.append((CACurrentMediaTime() - start) * 1000)
         }
 
-        let children = store.children(of: store.rootID)
+        let children = store.children(of: store.rootID).filter { store.isDirectory($0) }
+        let targets = children.isEmpty ? [store.rootID] : children
         var zoomTimes: [Double] = []
         zoomTimes.reserveCapacity(zoomSamples)
         for sample in 0..<zoomSamples {
-            let target = children.isEmpty ? store.rootID : children[sample % children.count]
+            let target = targets[sample % targets.count]
             let started = CACurrentMediaTime()
             let picture = MapPicture.make(
                 store: store,
                 root: target,
-                width: 1200,
-                height: 740,
+                width: width,
+                height: height,
                 metric: sample.isMultiple(of: 2) ? .allocated : .logical,
                 scanned: nil,
                 volumeUsed: nil,
                 zoomed: true
             )
             view.tiles = picture.tiles
-            view.hover = picture.tiles.first.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
-            view.needsDisplay = true
+            view.setHover(picture.tiles.first.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) })
             view.display()
             CATransaction.flush()
             zoomTimes.append((CACurrentMediaTime() - started) * 1000)
         }
-        _ = model
         return Result(
             hoverP99Ms: percentile(hoverTimes, 0.99),
             zoomP99Ms: percentile(zoomTimes, 0.99),
             hoverSamples: hoverTimes.count,
-            zoomSamples: zoomTimes.count
+            zoomSamples: zoomTimes.count,
+            layoutMs: layoutMs
         )
     }
 
@@ -269,27 +338,54 @@ enum RenderBench {
     }
 }
 
-/// Draws the treemap tiles itself so a hover or zoom frame is real AppKit/Core Animation work.
+/// Tiles live in one cached bitmap. A hover redraws only the previous and next highlight.
 private final class TreemapRenderView: NSView {
-    var tiles: [TileDraw] = []
-    var hover: CGRect?
+    var tiles: [TileDraw] = [] {
+        didSet { cache = nil }
+    }
+    private var cache: NSImage?
+    private var hoverRect: NSRect?
 
     override var isFlipped: Bool { true }
 
+    func setHover(_ rect: NSRect?) {
+        let previous = hoverRect
+        guard previous != rect else { return }
+        hoverRect = rect
+        if let previous { setNeedsDisplay(previous.insetBy(dx: -3, dy: -3)) }
+        if let rect { setNeedsDisplay(rect.insetBy(dx: -3, dy: -3)) }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.12, alpha: 1).setFill()
-        dirtyRect.fill()
-        for tile in tiles {
-            let rect = NSRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
-            guard rect.intersects(dirtyRect) else { continue }
-            NSColor(calibratedRed: 0.2, green: 0.45, blue: 0.9, alpha: 1).setFill()
-            rect.fill()
+        if cache == nil { cache = makeCache() }
+        if let cache {
+            cache.draw(in: dirtyRect, from: dirtyRect, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        } else {
+            NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
+            dirtyRect.fill()
         }
-        if let hover {
-            NSColor.white.setStroke()
-            let path = NSBezierPath(rect: hover)
+        if let hoverRect, hoverRect.intersects(dirtyRect) {
+            NSColor.black.setStroke()
+            let path = NSBezierPath(roundedRect: hoverRect, xRadius: 2, yRadius: 2)
             path.lineWidth = 2
             path.stroke()
+        }
+    }
+
+    private func makeCache() -> NSImage? {
+        let size = bounds.size
+        guard size.width > 1, size.height > 1 else { return nil }
+        return NSImage(size: size, flipped: true) { [tiles] _ in
+            NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let color = NSColor(calibratedRed: 0.16, green: 0.45, blue: 0.85, alpha: 1)
+            color.setFill()
+            for tile in tiles {
+                let tileRect = NSRect(x: tile.x, y: tile.y, width: max(tile.width, 0), height: max(tile.height, 0))
+                guard tileRect.width >= 1, tileRect.height >= 1 else { continue }
+                NSBezierPath(roundedRect: tileRect, xRadius: 3, yRadius: 3).fill()
+            }
+            return true
         }
     }
 }

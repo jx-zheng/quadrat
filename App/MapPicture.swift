@@ -16,6 +16,8 @@ struct TileDraw: Equatable, Identifiable {
     var depth: Int
     var hasChildren: Bool
     var isRemainder: Bool
+    var isDepthCapped: Bool
+    var bytes: UInt64
 }
 
 struct MapPicture: Equatable {
@@ -55,8 +57,16 @@ struct MapPicture: Equatable {
             let remainder = node.isRemainder || TileFold.isRemainder(node.id)
             let source = remainder ? TileFold.remainderParent(node.id) : node.id
             let flags = remainder ? NodeFlags() : store.flags(node.id)
-            let bytes = store.bytes(source, metric)
+            let bytes = node.sizeBytes > 0 ? node.sizeBytes : store.bytes(source, metric)
             let kind = remainder ? store.kind(source) : store.kind(node.id)
+            let name: String
+            if !node.headerTitle.isEmpty {
+                name = node.headerTitle
+            } else if remainder {
+                name = "\(max(node.foldedCount, 1)) smaller items"
+            } else {
+                name = store.name(of: node.id)
+            }
             tiles.append(TileDraw(
                 id: node.id,
                 x: node.x,
@@ -65,13 +75,15 @@ struct MapPicture: Equatable {
                 height: node.height,
                 header: node.header,
                 kind: kind,
-                name: remainder ? "smaller items" : store.name(of: node.id),
+                name: name,
                 sizeText: ByteFormat.bytes(bytes),
-                showsLabel: node.showsLabel || node.header > 0,
+                showsLabel: node.showsLabel,
                 hatched: remainder || flags.contains(.hatched),
                 depth: node.depth,
                 hasChildren: node.childCount > 0,
-                isRemainder: remainder
+                isRemainder: remainder,
+                isDepthCapped: node.isDepthCapped || flags.contains(.collapsed),
+                bytes: bytes
             ))
         }
         return MapPicture(tiles: tiles, layout: layout, width: width, height: height, hatch: hatch, unscannedBytes: unread)
