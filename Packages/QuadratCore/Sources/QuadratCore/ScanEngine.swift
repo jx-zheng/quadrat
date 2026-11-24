@@ -220,6 +220,7 @@ public final class ScanEngine {
         lock.unlock()
         let keepCount = Folding.largestKept(depth: depth)
         var keptSmall: [(entry: ListedEntry, duplicate: Bool)] = []
+        var smallFloor: UInt64 = .max
         var largeFiles: [(entry: ListedEntry, duplicate: Bool)] = []
         var foldedAlloc: UInt64 = 0
         var foldedLogical: UInt64 = 0
@@ -311,6 +312,20 @@ public final class ScanEngine {
             }
             if keptSmall.count < keepCount {
                 keptSmall.append((entry.materialized(), duplicate))
+                if keptSmall.count == keepCount {
+                    smallFloor = keptSmall.map(\.entry.allocBytes).min() ?? 0
+                }
+                return
+            }
+            if entry.allocBytes <= smallFloor {
+                if !duplicate {
+                    foldedAlloc &+= entry.allocBytes
+                    foldedLogical &+= entry.logicalBytes
+                    foldedCount += 1
+                    if entry.mayShareBlocks { foldedShare = true }
+                } else {
+                    foldedCount += 1
+                }
                 return
             }
             var smallest = 0
@@ -321,6 +336,7 @@ public final class ScanEngine {
                 let dropped = keptSmall[smallest]
                 fold(dropped.entry, duplicate: dropped.duplicate)
                 keptSmall[smallest] = (entry.materialized(), duplicate)
+                smallFloor = keptSmall.map(\.entry.allocBytes).min() ?? 0
             } else if !duplicate {
                 foldedAlloc &+= entry.allocBytes
                 foldedLogical &+= entry.logicalBytes

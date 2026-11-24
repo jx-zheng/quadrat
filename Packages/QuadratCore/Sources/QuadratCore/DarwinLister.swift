@@ -213,11 +213,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     }
 
     private static func readU32(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt32 {
-        var value: UInt32 = 0
-        withUnsafeMutableBytes(of: &value) { dest in
-            dest.copyBytes(from: UnsafeRawBufferPointer(start: base + offset, count: 4))
-        }
-        return value
+        UnsafeRawPointer(base + offset).loadUnaligned(as: UInt32.self)
     }
 
     private static func readI32(_ base: UnsafePointer<UInt8>, _ offset: Int) -> Int32 {
@@ -225,11 +221,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
     }
 
     private static func readU64(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt64 {
-        var value: UInt64 = 0
-        withUnsafeMutableBytes(of: &value) { dest in
-            dest.copyBytes(from: UnsafeRawBufferPointer(start: base + offset, count: 8))
-        }
-        return value
+        UnsafeRawPointer(base + offset).loadUnaligned(as: UInt64.self)
     }
 
     private static func readU32(_ buffer: [UInt8], _ offset: Int) -> UInt32 {
