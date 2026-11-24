@@ -2,6 +2,7 @@ import AppKit
 import QuadratCore
 import SwiftUI
 
+@MainActor
 enum SnapshotRunner {
     static func render(into directory: String) {
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
