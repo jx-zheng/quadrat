@@ -3,26 +3,47 @@ import Foundation
 import Darwin
 #endif
 
+/// Open-addressed set of hard-link identities. A Swift `Set` of every link on a
+/// whole disk was about 120 MB; this table is one flat buffer and stops inserting
+/// once it is full, so a scan cannot grow without bound. Past the cap, a repeat
+/// link is counted again rather than stored.
 final class HardLinkSet {
-    private let locks: [NSLock]
-    private var shards: [Set<UInt64>]
+    private var slots: [UInt64]
+    private var filled = 0
+    private let limit: Int
+    private let lock = NSLock()
 
-    init(shardCount: Int = 16) {
-        let count = max(1, shardCount)
-        locks = (0..<count).map { _ in NSLock() }
-        shards = Array(repeating: [], count: count)
+    init(capacity: Int = 1 << 18) {
+        let count = max(16, capacity)
+        slots = Array(repeating: 0, count: count)
+        limit = count * 3 / 4
     }
+
+    var count: Int { filled }
 
     /// Returns true when this is the first time `(device, file)` is seen.
     func insertFirst(device: UInt64, file: UInt64) -> Bool {
         guard file != 0 else { return true }
         var key = file &+ (device &* 0x9E3779B97F4A7C15)
         key ^= key >> 30
-        let index = Int(key % UInt64(locks.count))
-        locks[index].lock()
-        defer { locks[index].unlock() }
-        if shards[index].contains(key) { return false }
-        shards[index].insert(key)
+        if key == 0 { key = 1 }
+        lock.lock()
+        defer { lock.unlock() }
+        let mask = slots.count - 1
+        var index = Int(key & UInt64(mask))
+        var steps = 0
+        while steps < 64 {
+            let slot = slots[index]
+            if slot == 0 {
+                if filled >= limit { return true }
+                slots[index] = key
+                filled += 1
+                return true
+            }
+            if slot == key { return false }
+            index = (index + 1) & mask
+            steps += 1
+        }
         return true
     }
 }
@@ -93,6 +114,8 @@ public final class ScanEngine {
         defer { lock.unlock() }
         return body(&store)
     }
+
+    public var hardLinkCount: Int { links.count }
 
     public func statistics() -> ScanStatistics {
         lock.lock()
@@ -211,8 +234,13 @@ public final class ScanEngine {
         let outcome = enumerate(path) { entry in
             if entry.name == "." || entry.name == ".." || entry.name.isEmpty { return }
             seen += 1
-            let childPath = self.join(path, entry.name)
-            if self.skip?(childPath) == true {
+            let childPath: String
+            if self.skip != nil || (entry.isDirectory && !entry.isSymlink && !entry.isMountPoint) {
+                childPath = self.join(path, entry.name)
+            } else {
+                childPath = ""
+            }
+            if let skip = self.skip, skip(childPath) {
                 self.lock.lock()
                 self.inaccessible += 1
                 let kind = KindClassifier.classify(name: entry.name, parent: parentKind, isDirectory: true)
@@ -432,7 +460,7 @@ public final class ScanEngine {
         let due = (completions & 127) == 0
         lock.unlock()
         if due {
-            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+            _ = malloc_zone_pressure_relief(nil, Int.max)
         }
         #endif
     }

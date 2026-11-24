@@ -27,13 +27,13 @@ enum PerfRunner {
         if !skipRoot && directory != "/" {
             let root = scan(path: "/", displayName: "Macintosh HD")
             report["rootScan"] = root.json
-            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+            _ = malloc_zone_pressure_relief(nil, Int.max)
         }
 
         if !skipSynthetic {
             let synthetic = scanSynthetic()
             report["synthetic"] = synthetic.json
-            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+            _ = malloc_zone_pressure_relief(nil, Int.max)
         }
 
         let directoryScan = scan(path: directory, displayName: URL(fileURLWithPath: directory).lastPathComponent)
@@ -51,7 +51,7 @@ enum PerfRunner {
             ]
         }
         benchStore = nil
-        malloc_zone_pressure_relief(malloc_default_zone(), 0)
+        _ = malloc_zone_pressure_relief(nil, Int.max)
 
         if idleSeconds > 0 {
             report["idle"] = measureIdle(seconds: idleSeconds)
@@ -92,6 +92,7 @@ enum PerfRunner {
             "peakRSSBytes": Int(peak),
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
+            "hardLinks": engine.hardLinkCount,
             "inaccessible": stats.inaccessible
         ], store: store)
     }
@@ -124,6 +125,7 @@ enum PerfRunner {
             "peakRSSBytes": Int(peak),
             "rssAfterBytes": Int(ResidentMemory.currentBytes()),
             "payloadBytes": store.estimatedPayloadBytes,
+            "hardLinks": engine.hardLinkCount,
             "inaccessible": stats.inaccessible,
             "usedBulkLister": stats.usedBulkLister
         ], store: store)
