@@ -14,6 +14,8 @@ struct TileDraw: Equatable, Identifiable {
     var showsLabel: Bool
     var hatched: Bool
     var depth: Int
+    var hasChildren: Bool
+    var isRemainder: Bool
 }
 
 struct MapPicture: Equatable {
@@ -50,8 +52,11 @@ struct MapPicture: Equatable {
         tiles.reserveCapacity(layout.nodes.count)
         for node in layout.nodes where node.id != root || node.header > 0 {
             if node.id == root { continue }
-            let flags = store.flags(node.id)
-            let bytes = store.bytes(node.id, metric)
+            let remainder = node.isRemainder || TileFold.isRemainder(node.id)
+            let source = remainder ? TileFold.remainderParent(node.id) : node.id
+            let flags = remainder ? NodeFlags() : store.flags(node.id)
+            let bytes = store.bytes(source, metric)
+            let kind = remainder ? store.kind(source) : store.kind(node.id)
             tiles.append(TileDraw(
                 id: node.id,
                 x: node.x,
@@ -59,12 +64,14 @@ struct MapPicture: Equatable {
                 width: node.width,
                 height: node.height,
                 header: node.header,
-                kind: store.kind(node.id),
-                name: store.name(of: node.id),
+                kind: kind,
+                name: remainder ? "smaller items" : store.name(of: node.id),
                 sizeText: ByteFormat.bytes(bytes),
                 showsLabel: node.showsLabel || node.header > 0,
-                hatched: flags.contains(.hatched),
-                depth: node.depth
+                hatched: remainder || flags.contains(.hatched),
+                depth: node.depth,
+                hasChildren: node.childCount > 0,
+                isRemainder: remainder
             ))
         }
         return MapPicture(tiles: tiles, layout: layout, width: width, height: height, hatch: hatch, unscannedBytes: unread)

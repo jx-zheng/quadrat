@@ -625,30 +625,49 @@ struct TreemapCanvas: View, Equatable {
     }
 
     var body: some View {
-        Canvas { context, _ in
+        Canvas { context, size in
+            let canvas = QuadratTheme.canvas(scheme)
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(canvas))
             for tile in picture.tiles {
-                let rect = CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
-                let path = Path(roundedRect: rect, cornerRadius: 2)
-                context.fill(path, with: .color(QuadratTheme.kind(tile.kind, scheme)))
-                if tile.hatched {
-                    drawHatch(context, rect: rect, color: Color.white.opacity(scheme == .dark ? 0.16 : 0.35))
-                }
-                guard tile.showsLabel, tile.width > 36, tile.height > 18 else { continue }
-                let name = fit(tile.name, width: tile.width - 12)
-                if name.isEmpty { continue }
-                let title = Text(name).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                if tile.header > 0 {
-                    let line = Text("\(name)  \(tile.sizeText)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
-                    context.drawLayer { layer in
-                        layer.addFilter(.shadow(color: .black.opacity(0.35), radius: 1, y: 1))
-                        layer.draw(line, at: CGPoint(x: rect.minX + 6, y: rect.minY + 3), anchor: .topLeading)
+                let rect = CGRect(x: tile.x, y: tile.y, width: max(0, tile.width), height: max(0, tile.height))
+                guard rect.width >= 1, rect.height >= 1 else { continue }
+                let radius = min(5, max(2, min(rect.width, rect.height) / 4))
+                let fill = QuadratTheme.varied(tile.kind, scheme, variant: tile.id)
+                if tile.hasChildren, tile.header > 0 {
+                    let bar = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(tile.header, rect.height))
+                    let barPath = Path(roundedRect: bar, cornerRadius: min(4, bar.height / 2))
+                    context.fill(barPath, with: .color(fill.opacity(scheme == .dark ? 0.55 : 0.72)))
+                } else if !tile.hasChildren {
+                    let path = Path(roundedRect: rect, cornerRadius: radius)
+                    context.fill(path, with: .color(fill))
+                    if tile.hatched {
+                        var clip = context
+                        clip.clip(to: path)
+                        drawHatch(clip, rect: rect, color: Color.white.opacity(scheme == .dark ? 0.18 : 0.28))
                     }
-                } else if tile.height > 32 {
-                    context.drawLayer { layer in
-                        layer.addFilter(.shadow(color: .black.opacity(0.35), radius: 1, y: 1))
-                        layer.draw(title, at: CGPoint(x: rect.minX + 6, y: rect.minY + 5), anchor: .topLeading)
-                        let size = Text(tile.sizeText).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92))
-                        layer.draw(size, at: CGPoint(x: rect.minX + 6, y: rect.minY + 20), anchor: .topLeading)
+                }
+                let label = LabelPlacement.frame(
+                    tileX: tile.x, tileY: tile.y, tileWidth: tile.width, tileHeight: tile.height, header: tile.header
+                )
+                guard tile.showsLabel, label.visible else { continue }
+                let name = fit(tile.name, width: label.width)
+                if name.isEmpty { continue }
+                let band = CGRect(x: label.x, y: label.y, width: label.width, height: label.height)
+                context.drawLayer { layer in
+                    layer.clip(to: Path(roundedRect: rect, cornerRadius: radius))
+                    layer.clip(to: Path(band))
+                    if tile.header > 0 {
+                        let line = Text("\(name)  \(tile.sizeText)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(scheme == .dark ? Color.white : Color.white)
+                        layer.draw(line, at: CGPoint(x: band.minX, y: band.minY + 1), anchor: .topLeading)
+                    } else {
+                        let title = Text(name).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                        layer.draw(title, at: CGPoint(x: band.minX, y: band.minY), anchor: .topLeading)
+                        if band.height >= 28 {
+                            let size = Text(tile.sizeText).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92))
+                            layer.draw(size, at: CGPoint(x: band.minX, y: band.minY + 15), anchor: .topLeading)
+                        }
                     }
                 }
             }

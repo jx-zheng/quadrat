@@ -36,6 +36,8 @@ enum SnapshotRunner {
         let host = NSHostingView(rootView: view)
         let points = NSRect(x: 0, y: 0, width: 1440, height: 900)
         host.frame = points
+        host.wantsLayer = true
+        host.layer?.contentsScale = 2
         // Borderless, so the window does not draw a second set of traffic lights.
         let window = NSWindow(contentRect: points, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host

@@ -171,6 +171,11 @@ public struct NodeStore: Equatable, Sendable {
         return names.string(offset: nameOff[Int(id)], length: nameLen[Int(id)])
     }
 
+    public mutating func setAllocatedBytes(_ id: UInt32, _ bytes: UInt64) {
+        guard valid(id) else { return }
+        alloc4K[Int(id)] = SizeUnits.units(for: bytes)
+    }
+
     public mutating func setItemCount(_ id: UInt32, _ count: UInt32) {
         guard Int(id) < itemCount.count else { return }
         itemCount[Int(id)] = count

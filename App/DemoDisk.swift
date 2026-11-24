@@ -141,9 +141,15 @@ enum DemoDisk {
         builder.file(varr, "vm", 8.0, .system)
         builder.file(varr, "folders", 6.9, .system)
         builder.file(root, "homebrew", 9.4, .developer)
-        builder.file(root, "System & Other", 28.7, .system, flags: .hatched)
+        let system = builder.file(root, "System & Other", 28.7, .system, flags: .hatched)
 
         builder.store.recomputeAll()
+        let have = builder.store.bytes(root, .allocated)
+        if have < DemoDisk.used {
+            let current = builder.store.bytes(system, .allocated)
+            builder.store.setAllocatedBytes(system, current + (DemoDisk.used - have))
+            builder.store.recomputeAll()
+        }
         builder.store.setItemCount(devices, 291_200)
         builder.store.setItemCount(derived, 417_300)
         builder.store.setItemCount(root, 2_910_027)

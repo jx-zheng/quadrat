@@ -82,7 +82,6 @@ public final class ScanEngine {
     public private(set) var usedBulkLister = false
 
     private let lock = NSLock()
-    private var completions = 0
     private var cancelled = false
     private var items = 0
     private var directories = 0
@@ -463,23 +462,9 @@ public final class ScanEngine {
             parentDone = left <= 0
         }
         lock.unlock()
-        reclaimIfNeeded()
         if parentDone {
             complete(parent)
         }
-    }
-
-    /// Return freed scanner pages so the resident set tracks the live tree.
-    private func reclaimIfNeeded() {
-        #if os(macOS)
-        lock.lock()
-        completions += 1
-        let due = (completions & 127) == 0
-        lock.unlock()
-        if due {
-            ResidentMemory.relieve()
-        }
-        #endif
     }
 
     private func join(_ parent: String, _ name: String) -> String {

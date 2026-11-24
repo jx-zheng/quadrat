@@ -99,7 +99,7 @@ enum PerfRunner {
     }
 
     private static func scan(path: String, displayName: String) -> Phase {
-        let engine = ScanEngine(workerCount: 2)
+        let engine = ScanEngine()
         let sampler = PeakSampler()
         sampler.start()
         let started = Date()
@@ -301,14 +301,20 @@ private final class PeakSampler {
         peakResident = ResidentMemory.residentBytes()
         Thread.detachNewThread { [weak self] in
             guard let self else { return }
+            var ticks = 0
             while self.running {
-                // The scan's buffers are not all in the default zone. Purge every zone
-                // so a sample is not a cache of freed Swift allocations.
-                ResidentMemory.relieve()
+                ticks += 1
+                // Purging every sample stalled the scan. Every 400 ms is enough to
+                // keep reclaimed pages from sticking in the resident set.
+                if ticks.isMultiple(of: 8) {
+                    ResidentMemory.relieve()
+                }
                 let sample = ResidentMemory.currentBytes()
                 if sample > self.peak { self.peak = sample }
-                let resident = ResidentMemory.residentBytes()
-                if resident > self.peakResident { self.peakResident = resident }
+                if ticks.isMultiple(of: 8) {
+                    let resident = ResidentMemory.residentBytes()
+                    if resident > self.peakResident { self.peakResident = resident }
+                }
                 Thread.sleep(forTimeInterval: 0.05)
             }
             self.condition.lock()

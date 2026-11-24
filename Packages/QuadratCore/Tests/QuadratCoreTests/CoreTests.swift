@@ -206,6 +206,18 @@ final class SquarifyTests: XCTestCase {
         assertNoOverlap(boxes)
     }
 
+    func testGapSeparatesNeighbours() {
+        let boxes = Squarify.layout(
+            items: [Squarify.Item(id: 1, weight: 1), Squarify.Item(id: 2, weight: 1)],
+            x: 0, y: 0, width: 100, height: 40, gap: 2
+        )
+        XCTAssertEqual(boxes.count, 2)
+        let ordered = boxes.sorted { $0.x < $1.x }
+        let gap = ordered[1].x - (ordered[0].x + ordered[0].width)
+        XCTAssertEqual(gap, 2, accuracy: 0.05)
+        assertNoOverlap(boxes)
+    }
+
     func testGapDoesNotOverlap() {
         let items = (1...12).map { Squarify.Item(id: UInt32($0), weight: Double($0)) }
         let boxes = Squarify.layout(items: items, x: 0, y: 0, width: 200, height: 120, gap: 2)
@@ -223,6 +235,49 @@ final class SquarifyTests: XCTestCase {
                 XCTAssertLessThan(area, 0.01, "overlap \(a.id) \(b.id)", file: file, line: line)
             }
         }
+    }
+}
+
+final class TileRuleTests: XCTestCase {
+    func testTinySiblingsFoldAndNoSliversRemain() {
+        var items = [Squarify.Item(id: 1, weight: 10_000)]
+        items += (2...40).map { Squarify.Item(id: UInt32($0), weight: 1) }
+        let prepared = TileFold.prepare(items, width: 240, height: 160, minimumExtent: 4, parent: 7)
+        XCTAssertFalse(prepared.contains { $0.id == 2 })
+        XCTAssertTrue(prepared.contains { TileFold.isRemainder($0.id) })
+        let laid = Squarify.layout(items: prepared, x: 0, y: 0, width: 240, height: 160, gap: 2)
+        let boxes = TileFold.absorbSlivers(laid, minimumExtent: 4)
+        for box in boxes {
+            XCTAssertGreaterThanOrEqual(box.width, 4, "id \(box.id) width \(box.width)")
+            XCTAssertGreaterThanOrEqual(box.height, 4, "id \(box.id) height \(box.height)")
+        }
+    }
+
+    func testSliverIsAbsorbedByTheTileItTouches() {
+        let boxes = [
+            LayoutBox(id: 1, x: 0, y: 0, width: 80, height: 40),
+            LayoutBox(id: 2, x: 0, y: 40, width: 80, height: 2)
+        ]
+        let absorbed = TileFold.absorbSlivers(boxes, minimumExtent: 4)
+        XCTAssertEqual(absorbed.count, 1)
+        XCTAssertEqual(absorbed[0].height, 42, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(absorbed[0].width, 4)
+        XCTAssertGreaterThanOrEqual(absorbed[0].height, 4)
+    }
+
+    func testLabelSitsInsideTheTileAndHidesWhenCramped() {
+        let frame = LabelPlacement.frame(tileX: 10, tileY: 20, tileWidth: 90, tileHeight: 48, header: 0)
+        XCTAssertTrue(frame.visible)
+        XCTAssertGreaterThanOrEqual(frame.x, 10)
+        XCTAssertGreaterThanOrEqual(frame.y, 20)
+        XCTAssertLessThanOrEqual(frame.x + frame.width, 100)
+        XCTAssertLessThanOrEqual(frame.y + frame.height, 68)
+        let hidden = LabelPlacement.frame(tileX: 0, tileY: 0, tileWidth: 20, tileHeight: 10, header: 0)
+        XCTAssertFalse(hidden.visible)
+        let header = LabelPlacement.frame(tileX: 0, tileY: 0, tileWidth: 120, tileHeight: 80, header: 19)
+        XCTAssertTrue(header.visible)
+        XCTAssertEqual(header.y, 1, accuracy: 0.01)
+        XCTAssertLessThanOrEqual(header.height, 19)
     }
 }
 
