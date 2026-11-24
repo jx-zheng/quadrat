@@ -17,7 +17,7 @@ final class TreemapMapView: NSView {
     private let tilesLayer = CALayer()
     private let highlightLayer = CALayer()
     private var tileImage: CGImage?
-    private var layout = TreemapLayout()
+    private var tileLayout = TreemapLayout()
     private var rects: [UInt32: CGRect] = [:]
     private var shownPicture: MapPicture?
     private var shownScheme: ColorScheme?
@@ -65,7 +65,7 @@ final class TreemapMapView: NSView {
         if picture == shownPicture, scheme == shownScheme { return }
         shownPicture = picture
         shownScheme = scheme
-        layout = picture.layout
+        tileLayout = picture.layout
         rects.removeAll(keepingCapacity: true)
         for tile in picture.tiles {
             rects[tile.id] = CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
@@ -89,7 +89,7 @@ final class TreemapMapView: NSView {
     @discardableResult
     func moveHover(to point: CGPoint) -> UInt32? {
         let hit = Self.signposter.beginInterval("hit-test")
-        let raw = layout.index.hit(nodes: layout.nodes, x: point.x, y: point.y)
+        let raw = tileLayout.index.hit(nodes: tileLayout.nodes, x: point.x, y: point.y)
         let id = raw.flatMap { rects[$0] == nil ? nil : $0 }
         Self.signposter.endInterval("hit-test", hit)
 
