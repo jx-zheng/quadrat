@@ -61,7 +61,7 @@ public final class BulkDirectoryListing: DirectoryListing, BulkListing {
             if !Self.parse(buffer: buffer, count: Int(count), rootDevice: rootDevice, body: body) {
                 return yielded == 0 ? .unsupported : .entries([])
             }
-            yielded += count
+            yielded += Int(count)
         }
         // A non-empty directory that comes back with nothing means the bulk call
         // did not iterate. Callers fall back to the POSIX lister.
