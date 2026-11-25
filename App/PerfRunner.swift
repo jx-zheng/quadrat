@@ -41,14 +41,14 @@ enum PerfRunner {
             ResidentMemory.relieve()
         }
 
-        // The runner's disk rate swings by about 2x. Time the tree three times and keep
+        // The runner's disk rate swings by about 2x. Time the tree five times and keep
         // the faster pass; memory fields stay the higher of the passes.
         let displayName = URL(fileURLWithPath: directory).lastPathComponent
         var best = scan(path: directory, displayName: displayName)
         var bestRate = best.json["itemsPerSecond"] as? Double ?? 0
         var peakFootprint = best.json["peakRSSBytes"] as? Int ?? 0
         var peakResident = best.json["peakResidentBytes"] as? Int ?? 0
-        for _ in 0..<2 {
+        for _ in 0..<4 {
             ResidentMemory.relieve()
             let pass = scan(path: directory, displayName: displayName)
             peakFootprint = max(peakFootprint, pass.json["peakRSSBytes"] as? Int ?? 0)
@@ -62,7 +62,7 @@ enum PerfRunner {
         var directoryJSON = best.json
         directoryJSON["peakRSSBytes"] = peakFootprint
         directoryJSON["peakResidentBytes"] = peakResident
-        directoryJSON["passes"] = 3
+        directoryJSON["passes"] = 5
         report["directoryScan"] = directoryJSON
         let directoryStore = best.store
         if directoryStore.rootID != 0 {
