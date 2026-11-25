@@ -32,6 +32,9 @@ enum SnapshotRunner {
                 if index >= 3 {
                     requireLabels(model.picture, context: url.lastPathComponent)
                 }
+                if index == 4 {
+                    assertScreenFourAgrees(model)
+                }
             }
         }
     }
@@ -222,6 +225,25 @@ enum SnapshotRunner {
         requireLabels(model.picture, context: URL(fileURLWithPath: path).lastPathComponent)
     }
 
+    /// Screen 4's title, sidebar, and footer are one used figure, and the percent is used/capacity.
+    private static func assertScreenFourAgrees(_ model: AppModel) {
+        guard let volume = model.activeVolume, volume.capacity > 0 else {
+            FileHandle.standardError.write(Data("screen 4 has no volume\n".utf8))
+            exit(1)
+        }
+        let title = VolumeChrome.title(volume)
+        let sidebar = VolumeChrome.used(volume)
+        let footer = VolumeChrome.used(volume)
+        let percent = VolumeChrome.percent(volume)
+        let ratio = Double(volume.used) / Double(volume.capacity) * 100
+        let shown = Double(percent.dropLast()) ?? -1
+        if sidebar != footer || !title.contains(sidebar) || !title.contains(percent) || abs(shown - ratio) > 0.06 {
+            FileHandle.standardError.write(Data("screen 4 figures disagree title=\(title) sidebar=\(sidebar) footer=\(footer) ratio=\(ratio)\n".utf8))
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("screen4 title \(title) sidebar \(sidebar) footer \(footer)\n".utf8))
+    }
+
     /// Every drawn tile, including folds, file aggregates and gray tiles, has a label that fits.
     private static func requireLabels(_ picture: MapPicture, context: String) {
         var unlabeled = 0
@@ -233,7 +255,7 @@ enum SnapshotRunner {
                 tileHeight: tile.height,
                 header: tile.header
             )
-            if tile.name.isEmpty || !tile.showsLabel || !fits {
+            if tile.name.isEmpty || !tile.showsLabel || !fits || LabelFit.tooThin(width: tile.width, height: tile.height) {
                 unlabeled += 1
             }
         }
@@ -243,7 +265,7 @@ enum SnapshotRunner {
                     name: tile.name, sizeText: tile.sizeText,
                     tileWidth: tile.width, tileHeight: tile.height, header: tile.header
                 )
-                return tile.name.isEmpty || !tile.showsLabel || !fits
+                return tile.name.isEmpty || !tile.showsLabel || !fits || LabelFit.tooThin(width: tile.width, height: tile.height)
             }.map { "\($0.name) \($0.sizeText) \(Int($0.width))x\(Int($0.height))" }.joined(separator: ", ")
             FileHandle.standardError.write(Data("unlabeledTiles \(unlabeled) in \(context) (\(picture.tiles.count) tiles): \(names)\n".utf8))
             exit(1)

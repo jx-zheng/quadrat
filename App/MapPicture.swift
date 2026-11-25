@@ -53,7 +53,7 @@ struct MapPicture: Equatable {
         var tiles: [TileDraw] = []
         tiles.reserveCapacity(layout.nodes.count)
         for node in layout.nodes where node.id != root || node.header > 0 {
-            if node.id == root { continue }
+            if node.id == root || node.width < 1 || node.height < 1 { continue }
             let files = TileFold.isFiles(node.id)
             let remainder = node.isRemainder || TileFold.isRemainder(node.id)
             let source = files ? TileFold.filesParent(node.id) : (remainder ? TileFold.remainderParent(node.id) : node.id)

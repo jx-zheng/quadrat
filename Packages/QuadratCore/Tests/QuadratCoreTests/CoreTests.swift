@@ -667,6 +667,37 @@ final class ReadableTileTests: XCTestCase {
         }
     }
 
+    func testSingleChildChainIsOneHeaderAndAppsDoNotOpen() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let you = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        _ = store.addNode(parent: you, name: "Documents", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .documents, flags: [])
+        let pictures = store.addNode(parent: you, name: "Pictures", allocBytes: 0, logicalBytes: 0, kind: .photos, flags: .directory)
+        _ = store.addNode(parent: pictures, name: "originals", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .photos, flags: [])
+        let apps = store.addNode(parent: root, name: "Applications", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        let xcode = store.addNode(parent: apps, name: "Xcode.app", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        let contents = store.addNode(parent: xcode, name: "Contents", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        _ = store.addNode(parent: contents, name: "Xcode", allocBytes: 12_000_000_000, logicalBytes: 12_000_000_000, kind: .apps, flags: [])
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1200, height: 800,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        let labels = layout.nodes.filter { $0.depth > 0 && $0.width > 1 && $0.height > 1 }.map(\.label)
+        XCTAssertTrue(labels.contains { $0 == "Users / you" || $0.hasPrefix("Users / you") }, "labels \(labels)")
+        XCTAssertFalse(labels.contains("Users"))
+        XCTAssertFalse(labels.contains("you"))
+        XCTAssertTrue(labels.contains("Xcode.app"), "labels \(labels)")
+        XCTAssertFalse(labels.contains("Contents"))
+        XCTAssertFalse(labels.contains("MacOS"))
+        let xcodeTile = layout.nodes.first { $0.label == "Xcode.app" && $0.width > 1 }
+        XCTAssertEqual(xcodeTile?.childCount, 0)
+        for node in layout.nodes where node.depth > 0 && node.width > 1 && node.height > 1 {
+            XCTAssertFalse(LabelFit.tooThin(width: node.width, height: node.height), node.label)
+        }
+    }
+
     func testFolderShareStaysInsideTheDisk() {
         let share = DiskShare(capacity: 1_000_000_000_000, free: 800_000_000_000, volumeName: "Macintosh HD")
         XCTAssertGreaterThan(share.capacity, 0)

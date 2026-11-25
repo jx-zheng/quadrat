@@ -224,7 +224,7 @@ final class TreemapMapView: NSView {
             label.fontSize = 12
             label.foregroundColor = NSColor.white.cgColor
             label.alignmentMode = .left
-            label.isWrapped = true
+            label.isWrapped = false
             label.truncationMode = .none
             let band = CALayer()
             band.zPosition = 0.5

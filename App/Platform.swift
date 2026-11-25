@@ -27,6 +27,17 @@ struct DiskVolume: Identifiable, Equatable {
     var usedText: String { ByteFormat.bytes(used) }
 }
 
+/// Title, sidebar, and footer all read these, so they cannot disagree.
+enum VolumeChrome {
+    static func used(_ volume: DiskVolume) -> String { volume.usedText }
+    static func percent(_ volume: DiskVolume) -> String {
+        ByteFormat.percent(volume.used, of: volume.capacity)
+    }
+    static func title(_ volume: DiskVolume) -> String {
+        "\(used(volume)) used · \(percent(volume)) · \(volume.freeText) free"
+    }
+}
+
 enum VolumeCatalog {
     static func current() -> [DiskVolume] {
         let keys: Set<URLResourceKey> = [

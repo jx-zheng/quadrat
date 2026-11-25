@@ -15,13 +15,26 @@ public enum ChainCollapse {
         var seen: Set<UInt32> = [start]
         var steps = 0
         while steps < limit {
+            // An app bundle is one tile. Do not walk into Contents.
+            if store.name(of: leaf).lowercased().hasSuffix(".app") { break }
             guard let only = soleDirectoryChild(store: store, id: leaf, metric: metric), seen.insert(only).inserted else { break }
             leaf = only
             names.append(store.name(of: only))
             steps += 1
         }
-        let title = names.count > 1 ? names.joined(separator: " / ") : ""
+        let title = displayTitle(names: names)
         return Chain(leaf: leaf, title: title, names: names)
+    }
+
+    /// `Users / you` stays a chain. `Xcode.app / Contents` is just `Xcode.app`.
+    public static func displayTitle(names: [String]) -> String {
+        if let app = names.first(where: { $0.lowercased().hasSuffix(".app") }) {
+            return app
+        }
+        let boring: Set<String> = ["contents", "macos", "resources", "frameworks", "versions", "helpers"]
+        let kept = names.filter { !boring.contains($0.lowercased()) }
+        let use = kept.isEmpty ? names : kept
+        return use.count > 1 ? use.joined(separator: " / ") : ""
     }
 
     private static func soleDirectoryChild(store: NodeStore, id: UInt32, metric: SizeMetric) -> UInt32? {
@@ -57,13 +70,22 @@ public enum LabelFit {
         inset: Double = 8
     ) -> Bool {
         guard !name.isEmpty, tileWidth > inset * 2, tileHeight > 4 else { return false }
+        if tooThin(width: tileWidth, height: tileHeight) { return false }
         let nameWidth = Double(name.count) * 7.6
         let sizeWidth = Double(sizeText.count) * 6.8
         let available = tileWidth - inset * 2
         if header > 0 {
             return header >= 16 && nameWidth + sizeWidth + 10 <= available
         }
-        return tileHeight >= 36 && nameWidth <= available && sizeWidth <= available
+        return tileHeight >= minLabelHeight && nameWidth <= available && sizeWidth <= available
+    }
+
+    public static let minLabelWidth: Double = 40
+    public static let minLabelHeight: Double = 36
+
+    /// A strip this small cannot hold a name and a size, so it must not be drawn.
+    public static func tooThin(width: Double, height: Double) -> Bool {
+        width + 0.5 < minLabelWidth || height + 0.5 < minLabelHeight
     }
 }
 

@@ -113,8 +113,75 @@ public struct TreemapLayout: Equatable, Sendable {
         var layout = TreemapLayout(nodes: [], childIndex: [], root: 0, options: options)
         guard rootID != 0, width > 0, height > 0 else { return layout }
         layout.root = layout.place(store: store, id: rootID, x: 0, y: 0, width: width, height: height, depth: 0)
+        layout.absorbSingleChildFolders(store: store)
         layout.index = TileGrid.build(nodes: layout.nodes, root: layout.root)
         return layout
+    }
+
+    /// A parent with exactly one visible child folder is one header, not two stacked strips.
+    private mutating func absorbSingleChildFolders(store: NodeStore) {
+        var changed = true
+        var guardrail = 0
+        while changed && guardrail < 6 {
+            changed = false
+            guardrail += 1
+            for index in nodes.indices {
+                let node = nodes[index]
+                guard node.depth > 0, node.childCount == 1, node.width > 1, node.height > 1 else { continue }
+                let childAt = childIndex[node.childStart]
+                guard nodes.indices.contains(childAt) else { continue }
+                let child = nodes[childAt]
+                guard child.width > 1, child.height > 1 else { continue }
+                guard !child.isRemainder, !TileFold.isFiles(child.id), !TileFold.isRemainder(child.id) else { continue }
+                let folder = child.childCount > 0 || (Int(child.id) < store.firstChild.count && store.isDirectory(child.id))
+                guard folder else { continue }
+                let body = max(1, node.height - node.header)
+                guard child.width >= node.width * 0.85, child.height >= body * 0.85 else { continue }
+                let combined: String
+                if node.label.contains(child.label) {
+                    combined = node.label
+                } else if child.label.contains(node.label) {
+                    combined = child.label
+                } else {
+                    combined = "\(node.label) / \(child.label)"
+                }
+                nodes[index].label = combined
+                nodes[index].headerTitle = combined
+                if nodes[index].header < 1 { nodes[index].header = max(child.header, 18) }
+                nodes[index].showsLabel = labelFits(
+                    name: combined, bytes: nodes[index].sizeBytes,
+                    width: nodes[index].width, height: nodes[index].height, header: nodes[index].header
+                )
+                let shift = (child.y + child.header) - (nodes[index].y + nodes[index].header)
+                nodes[index].childStart = child.childStart
+                nodes[index].childCount = child.childCount
+                if shift != 0 {
+                    shiftSubtree(childAt, dy: -shift)
+                }
+                nodes[childAt].width = 0
+                nodes[childAt].height = 0
+                nodes[childAt].childCount = 0
+                nodes[childAt].showsLabel = false
+                changed = true
+            }
+        }
+    }
+
+    private mutating func shiftSubtree(_ index: Int, dy: Double) {
+        guard nodes.indices.contains(index), dy != 0 else { return }
+        var stack = [index]
+        var seen = 0
+        while let current = stack.popLast(), seen < nodes.count {
+            seen += 1
+            if current != index {
+                nodes[current].y += dy
+            }
+            let node = nodes[current]
+            guard node.childCount > 0 else { continue }
+            for child in childIndex[node.childStart..<(node.childStart + node.childCount)] {
+                stack.append(child)
+            }
+        }
     }
 
     public func children(of index: Int) -> ArraySlice<Int> {
@@ -168,7 +235,8 @@ public struct TreemapLayout: Equatable, Sendable {
             isRemainder: remainder, isDepthCapped: false, foldedCount: foldedCount,
             headerTitle: chain.title, sizeBytes: sizeBytes, label: labelName
         ))
-        if remainder || files {
+        if remainder || files || store.name(of: leaf).lowercased().hasSuffix(".app") {
+            nodes[index].isDepthCapped = false
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
             return index
         }
@@ -221,6 +289,7 @@ public struct TreemapLayout: Equatable, Sendable {
             let room = options.maxTiles - visibleCount()
             if room < 2 { break }
             let node = nodes[index]
+            if store.name(of: node.id).lowercased().hasSuffix(".app") { continue }
             guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
             let header = 18.0
             guard node.height > header + options.minTileHeight else { continue }

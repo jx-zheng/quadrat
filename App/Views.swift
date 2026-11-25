@@ -403,13 +403,13 @@ struct WorkspaceView: View {
             let rate = readout?.rate ?? model.stats.itemsPerSecond
             return "Scanning… \(ByteFormat.grouped(UInt64(items))) items · \(ByteFormat.rate(rate))"
         }
-        if !model.isZoomed, let volume = model.activeVolume, volume.capacity > 0 {
-            if volume.detail.hasPrefix("On ") {
-                let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.store.rootID)
-                let name = String(volume.detail.dropFirst(3))
-                return "\(ByteFormat.bytes(bytes)) · \(model.percentOfDisk(bytes)) of \(name)"
-            }
-            return "\(volume.usedText) used · \(ByteFormat.percent(volume.used, of: volume.capacity)) · \(volume.freeText) free"
+        if let volume = model.activeVolume, volume.capacity > 0, !volume.detail.hasPrefix("On ") {
+            return VolumeChrome.title(volume)
+        }
+        if !model.isZoomed, let volume = model.activeVolume, volume.detail.hasPrefix("On ") {
+            let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.store.rootID)
+            let name = String(volume.detail.dropFirst(3))
+            return "\(ByteFormat.bytes(bytes)) · \(model.percentOfDisk(bytes)) of \(name)"
         }
         let bytes = model.store.rootID == 0 ? 0 : model.nodeBytes(model.zoomID)
         let capacity = model.activeVolume?.capacity ?? 0
@@ -878,9 +878,9 @@ struct SidebarView: View {
             return ByteFormat.bytes(model.nodeBytes(model.store.rootID))
         }
         if volume.isStartup, let active = model.activeVolume, active.id == volume.id {
-            return active.usedText
+            return VolumeChrome.used(active)
         }
-        return volume.usedText
+        return VolumeChrome.used(volume)
     }
 
     private func jumpSize(_ needle: String) -> String {
@@ -933,7 +933,7 @@ struct SidebarView: View {
                 }
             }
             .frame(height: 5)
-            footerLine("Used (volume)", volume.usedText)
+            footerLine("Used (volume)", VolumeChrome.used(volume))
             footerLine("Purgeable", ByteFormat.bytes(volume.purgeable))
             footerLine("Local snapshots", model.drawsTrafficLights ? ByteFormat.bytes(DemoDisk.snapshots) : (volume.snapshotCount > 0 ? "\(volume.snapshotCount)" : "None"))
             footerLine("Capacity", ByteFormat.bytes(volume.capacity))
