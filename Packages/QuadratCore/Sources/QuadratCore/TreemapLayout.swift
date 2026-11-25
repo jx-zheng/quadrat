@@ -581,8 +581,14 @@ public enum TileFold {
         }
 
         func foldUndersized(_ boxes: [LayoutBox], kept: inout [Squarify.Item], foldedBytes: inout Double) -> Bool {
-            let rejects = boxes.filter { !isRemainder($0.id) && tooSmall($0) }
+            var rejects = boxes.filter { !isRemainder($0.id) && tooSmall($0) }
             guard !rejects.isEmpty else { return false }
+            let real = boxes.filter { !isRemainder($0.id) }
+            if rejects.count == real.count, real.count > 1 {
+                let ranked = real.sorted { ($0.width * $0.height) > ($1.width * $1.height) }
+                let keepIDs = Set(ranked.prefix(max(1, ranked.count / 2)).map(\.id))
+                rejects = rejects.filter { !keepIDs.contains($0.id) }
+            }
             let rejectIDs = Set(rejects.map(\.id))
             var next: [Squarify.Item] = []
             next.reserveCapacity(kept.count)
