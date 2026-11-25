@@ -511,11 +511,10 @@ public struct TreemapLayout: Equatable, Sendable {
             return !tooSmall && labelFits(name: name, bytes: bytes, width: box.width, height: box.height, header: 0)
         }
         var boxes = lay()
-        for _ in 0..<12 {
+        for _ in 0..<16 {
             let unfit = boxes.filter { !fits($0) && !TileFold.isRemainder($0.id) && !TileFold.isFiles($0.id) }
             guard let victim = unfit.min(by: { $0.width * $0.height < $1.width * $1.height }),
-                  let item = named.first(where: { $0.id == victim.id }),
-                  named.count > 1 else { break }
+                  let item = named.first(where: { $0.id == victim.id }) else { break }
             named.removeAll { $0.id == item.id }
             if store.isDirectory(item.id) {
                 foldCount += 1
@@ -537,8 +536,9 @@ public struct TreemapLayout: Equatable, Sendable {
             filesBytes = 0
             boxes = lay()
         }
-        if boxes.isEmpty, let only = packed.named.max(by: { $0.weight < $1.weight }) {
-            boxes = [LayoutBox(id: only.id, x: x, y: y, width: width, height: height)]
+        // Never return a box whose label does not fit. Drop it and fill the rect with the rest.
+        guard boxes.allSatisfy(fits) else {
+            return Covered(boxes: [], foldCount: 0, foldBytes: 0, filesCount: 0, filesBytes: 0)
         }
         return Covered(boxes: boxes, foldCount: foldCount, foldBytes: foldBytes, filesCount: filesCount, filesBytes: filesBytes)
     }

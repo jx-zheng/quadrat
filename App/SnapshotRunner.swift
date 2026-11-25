@@ -238,7 +238,14 @@ enum SnapshotRunner {
             }
         }
         if unlabeled > 0 {
-            FileHandle.standardError.write(Data("unlabeledTiles \(unlabeled) in \(context) (\(picture.tiles.count) tiles)\n".utf8))
+            let names = picture.tiles.filter { tile in
+                let fits = LabelFit.fits(
+                    name: tile.name, sizeText: tile.sizeText,
+                    tileWidth: tile.width, tileHeight: tile.height, header: tile.header
+                )
+                return tile.name.isEmpty || !tile.showsLabel || !fits
+            }.map { "\($0.name) \($0.sizeText) \(Int($0.width))x\(Int($0.height))" }.joined(separator: ", ")
+            FileHandle.standardError.write(Data("unlabeledTiles \(unlabeled) in \(context) (\(picture.tiles.count) tiles): \(names)\n".utf8))
             exit(1)
         }
         FileHandle.standardError.write(Data("unlabeledTiles 0 in \(context)\n".utf8))
