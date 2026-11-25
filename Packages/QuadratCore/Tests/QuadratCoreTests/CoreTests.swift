@@ -598,6 +598,75 @@ final class ReadableTileTests: XCTestCase {
         assertEveryTileIsLabelled(store)
     }
 
+    func testChildrenFillTheParentAndLargeNamesStay() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let you = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let library = store.addNode(parent: you, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        _ = store.addNode(parent: library, name: "Developer", allocBytes: 40_000_000_000, logicalBytes: 40_000_000_000, kind: .developer, flags: .directory)
+        let pictures = store.addNode(parent: you, name: "Pictures", allocBytes: 0, logicalBytes: 0, kind: .photos, flags: .directory)
+        _ = store.addNode(parent: pictures, name: "originals", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .photos, flags: [])
+        _ = store.addNode(parent: pictures, name: "exports", allocBytes: 4_000_000_000, logicalBytes: 4_000_000_000, kind: .photos, flags: [])
+        let movies = store.addNode(parent: you, name: "Movies", allocBytes: 0, logicalBytes: 0, kind: .media, flags: .directory)
+        _ = store.addNode(parent: movies, name: "Final Cut Library.fcpbundle", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .media, flags: [])
+        _ = store.addNode(parent: you, name: "Backup", allocBytes: 12_000_000_000, logicalBytes: 12_000_000_000, kind: .backups, flags: [])
+        for index in 0..<24 {
+            _ = store.addNode(parent: you, name: "note-\(index).txt", allocBytes: 200_000_000, logicalBytes: 200_000_000, kind: .documents, flags: [])
+        }
+        let apps = store.addNode(parent: root, name: "Applications", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        for name in ["Xcode.app", "Safari.app", "Slack.app", "Zoom.app", "Music.app", "Pages.app", "Keynote.app", "Numbers.app"] {
+            _ = store.addNode(parent: apps, name: name, allocBytes: 4_000_000_000, logicalBytes: 4_000_000_000, kind: .apps, flags: [])
+        }
+        store.recomputeAll()
+        XCTAssertEqual(KindClassifier.classify(name: "Applications", parent: .other, isDirectory: true), .apps)
+
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1200, height: 800,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        assertChildrenCoverParents(layout)
+        let tiles = layout.nodes.filter { $0.depth > 0 }
+        XCTAssertTrue(tiles.contains { $0.label == "originals" }, "Pictures shows its children")
+        XCTAssertTrue(tiles.contains { $0.label == "Final Cut Library.fcpbundle" }, "Movies shows its children")
+        XCTAssertTrue(tiles.contains { $0.label.contains("files") }, "loose files are a named tile")
+        let appNames = Set(tiles.map(\.label))
+        XCTAssertTrue(appNames.contains("Xcode.app"))
+        XCTAssertFalse(appNames.contains("8 smaller items"))
+        for index in layout.nodes.indices {
+            let node = layout.nodes[index]
+            guard node.childCount > 0 else { continue }
+            let kids = layout.children(of: index).map { layout.nodes[$0] }
+            guard let fold = kids.first(where: \.isRemainder) else { continue }
+            let content = node.width * (node.header > 0 ? node.height - node.header : node.height)
+            XCTAssertLessThan(fold.width * fold.height, content * 0.5, "fold is a minority inside \(node.label)")
+            let foldedShare = Double(fold.sizeBytes) / Double(node.sizeBytes)
+            let areaShare = (fold.width * fold.height) / content
+            XCTAssertEqual(areaShare, foldedShare, accuracy: 0.05, "fold area follows only the folded bytes")
+        }
+        XCTAssertEqual(LayoutAudit.check(store: store, width: 1200, height: 800).unlabeled, 0)
+    }
+
+    private func assertChildrenCoverParents(_ layout: TreemapLayout, file: StaticString = #filePath, line: UInt = #line) {
+        for index in layout.nodes.indices {
+            let node = layout.nodes[index]
+            guard node.childCount > 0 else { continue }
+            let body = node.header > 0 ? max(0, node.height - node.header) : node.height
+            let content = node.width * body
+            guard content > 1 else { continue }
+            var covered = 0.0
+            for child in layout.children(of: index) {
+                let tile = layout.nodes[child]
+                covered += max(0, tile.width) * max(0, tile.height)
+            }
+            XCTAssertGreaterThanOrEqual(
+                covered / content, 0.95,
+                "\(node.label) children cover \(covered / content)",
+                file: file, line: line
+            )
+        }
+    }
+
     func testFolderShareStaysInsideTheDisk() {
         let share = DiskShare(capacity: 1_000_000_000_000, free: 800_000_000_000, volumeName: "Macintosh HD")
         XCTAssertGreaterThan(share.capacity, 0)

@@ -51,7 +51,8 @@ public struct TreemapOptions: Equatable, Sendable {
             metric: metric,
             headerHeight: 0,
             maxHeaderDepth: 0,
-            maxVisibleDepth: 2,
+            // Two levels of named children under the current root. Three is the ceiling.
+            maxVisibleDepth: 3,
             minTileWidth: 40,
             minTileHeight: 24,
             maxTiles: 60
@@ -138,20 +139,30 @@ public struct TreemapLayout: Equatable, Sendable {
         opening: Bool = true
     ) -> Int {
         let remainder = TileFold.isRemainder(id)
-        let chain = remainder
+        let files = TileFold.isFiles(id)
+        let chain = (remainder || files)
             ? ChainCollapse.Chain(leaf: id, title: "", names: [])
             : ChainCollapse.resolve(store: store, start: id, metric: options.metric)
         let leaf = chain.leaf
         let index = nodes.count
-        let sizeBytes = remainder ? foldedBytes : store.bytes(leaf, options.metric)
-        let labelName = !chain.title.isEmpty ? chain.title : (remainder ? "\(max(foldedCount, 1)) smaller items" : store.name(of: leaf))
+        let sizeBytes = (remainder || files) ? foldedBytes : store.bytes(leaf, options.metric)
+        let labelName: String
+        if files {
+            labelName = "\(max(foldedCount, 1)) files"
+        } else if !chain.title.isEmpty {
+            labelName = chain.title
+        } else if remainder {
+            labelName = "\(max(foldedCount, 1)) smaller items"
+        } else {
+            labelName = store.name(of: leaf)
+        }
         nodes.append(TreemapNode(
             id: leaf, x: x, y: y, width: width, height: height,
             header: 0, childStart: 0, childCount: 0, showsLabel: false, depth: depth,
             isRemainder: remainder, isDepthCapped: false, foldedCount: foldedCount,
             headerTitle: chain.title, sizeBytes: sizeBytes, label: labelName
         ))
-        if remainder {
+        if remainder || files {
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
             return index
         }
@@ -172,52 +183,10 @@ public struct TreemapLayout: Equatable, Sendable {
             return index
         }
 
-        let cap = min(room, depth == 0 ? options.maxTiles : min(8, room))
-        let kids = gatherChildren(store: store, id: leaf, limit: cap)
-        if kids.items.isEmpty && kids.foldedCount == 0 {
+        if !installChildren(store: store, index: index, parent: leaf, x: x, y: y, width: width, height: height, depth: depth, header: 0) {
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
             return index
         }
-
-        let folded = TileFold.layoutMinimum(
-            items: kids.items,
-            x: x, y: y, width: width, height: height,
-            gap: options.gap,
-            minWidth: options.minTileWidth,
-            minHeight: options.minTileHeight,
-            parent: leaf,
-            maxCount: cap,
-            seededFoldCount: kids.foldedCount,
-            seededFoldBytes: kids.foldedBytes
-        )
-        let readable = retainReadable(
-            store: store, fold: folded, items: kids.items,
-            x: x, y: y, width: width, height: height, parent: leaf
-        )
-        var childNodes: [Int] = []
-        childNodes.reserveCapacity(readable.boxes.count)
-        for box in readable.boxes where box.width > 0.05 && box.height > 0.05 {
-            if visibleCount() >= options.maxTiles { break }
-            let childRemainder = TileFold.isRemainder(box.id)
-            childNodes.append(place(
-                store: store,
-                id: box.id,
-                x: box.x,
-                y: box.y,
-                width: box.width,
-                height: box.height,
-                depth: depth + 1,
-                foldedCount: childRemainder ? readable.foldedCount : 0,
-                foldedBytes: childRemainder ? UInt64(max(0, readable.foldedBytes.rounded())) : 0,
-                opening: depth > 0
-            ))
-        }
-        let start = childIndex.count
-        childIndex.append(contentsOf: childNodes)
-        nodes[index].childStart = start
-        nodes[index].childCount = childNodes.count
-        nodes[index].header = 0
-        nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
         if depth == 0 {
             openLargestFolders(store: store)
         }
@@ -250,55 +219,11 @@ public struct TreemapLayout: Equatable, Sendable {
             let header = 18.0
             guard node.height > header + options.minTileHeight else { continue }
             guard labelFits(name: node.label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) else { continue }
-            let kids = gatherChildren(store: store, id: node.id, limit: min(8, room))
-            guard !kids.items.isEmpty || kids.foldedCount > 0 else { continue }
-            let folded = TileFold.layoutMinimum(
-                items: kids.items,
-                x: node.x, y: node.y + header, width: node.width, height: node.height - header,
-                gap: options.gap,
-                minWidth: options.minTileWidth,
-                minHeight: options.minTileHeight,
-                parent: node.id,
-                maxCount: min(8, room),
-                seededFoldCount: kids.foldedCount,
-                seededFoldBytes: kids.foldedBytes
-            )
-            let readable = retainReadable(
-                store: store, fold: folded, items: kids.items,
-                x: node.x, y: node.y + header, width: node.width, height: node.height - header, parent: node.id
-            )
-            guard !readable.boxes.isEmpty else { continue }
-            var childNodes: [Int] = []
-            for box in readable.boxes where box.width > 0.05 && box.height > 0.05 {
-                if visibleCount() >= options.maxTiles { break }
-                let childRemainder = TileFold.isRemainder(box.id)
-                childNodes.append(place(
-                    store: store,
-                    id: box.id,
-                    x: box.x,
-                    y: box.y,
-                    width: box.width,
-                    height: box.height,
-                    depth: node.depth + 1,
-                    foldedCount: childRemainder ? readable.foldedCount : 0,
-                    foldedBytes: childRemainder ? UInt64(max(0, readable.foldedBytes.rounded())) : 0,
-                    opening: false
-                ))
-            }
-            guard !childNodes.isEmpty else { continue }
-            let start = childIndex.count
-            childIndex.append(contentsOf: childNodes)
-            nodes[index].childStart = start
-            nodes[index].childCount = childNodes.count
-            nodes[index].header = 18
-            nodes[index].isDepthCapped = false
-            nodes[index].showsLabel = labelFits(
-                name: nodes[index].label,
-                bytes: nodes[index].sizeBytes,
-                width: nodes[index].width,
-                height: nodes[index].height,
-                header: 18
-            )
+            guard installChildren(
+                store: store, index: index, parent: node.id,
+                x: node.x, y: node.y, width: node.width, height: node.height,
+                depth: node.depth, header: header
+            ) else { continue }
             opened = true
         }
         return opened
@@ -382,6 +307,240 @@ public struct TreemapLayout: Equatable, Sendable {
             tileHeight: height,
             header: header
         )
+    }
+
+    /// Lay the parent's bytes out as named children, one "<N> files" tile, and a tail fold.
+    /// The boxes fill `rect`. The fold's weight is only the children that were not named.
+    private mutating func installChildren(
+        store: NodeStore,
+        index: Int,
+        parent: UInt32,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+        depth: Int,
+        header: Double
+    ) -> Bool {
+        let room = options.maxTiles - visibleCount()
+        guard room >= 2, height > header + 8 else { return false }
+        // Named tiles plus the files tile plus the tail fold have to fit in the budget,
+        // so a later tile is never dropped and its rectangle left blank.
+        let budget = min(12, room)
+        let packed = packChildren(store: store, id: parent, limit: max(1, budget - 2))
+        let bodyY = y + header
+        let bodyH = height - header
+        let laid = layoutCovering(store: store, packed: packed, parent: parent, x: x, y: bodyY, width: width, height: bodyH)
+        guard !laid.boxes.isEmpty else { return false }
+        var childNodes: [Int] = []
+        childNodes.reserveCapacity(laid.boxes.count)
+        for box in laid.boxes where box.width > 0.5 && box.height > 0.5 {
+            let count: Int
+            let bytes: UInt64
+            if TileFold.isRemainder(box.id) {
+                count = laid.foldCount
+                bytes = UInt64(max(0, laid.foldBytes.rounded()))
+            } else if TileFold.isFiles(box.id) {
+                count = laid.filesCount
+                bytes = UInt64(max(0, laid.filesBytes.rounded()))
+            } else {
+                count = 0
+                bytes = 0
+            }
+            childNodes.append(place(
+                store: store,
+                id: box.id,
+                x: box.x,
+                y: box.y,
+                width: box.width,
+                height: box.height,
+                depth: depth + 1,
+                foldedCount: count,
+                foldedBytes: bytes,
+                opening: false
+            ))
+        }
+        guard !childNodes.isEmpty else { return false }
+        let start = childIndex.count
+        childIndex.append(contentsOf: childNodes)
+        nodes[index].childStart = start
+        nodes[index].childCount = childNodes.count
+        nodes[index].header = header
+        nodes[index].isDepthCapped = false
+        nodes[index].showsLabel = labelFits(
+            name: nodes[index].label,
+            bytes: nodes[index].sizeBytes,
+            width: nodes[index].width,
+            height: nodes[index].height,
+            header: header
+        )
+        return true
+    }
+
+    private struct Packed {
+        var named: [Squarify.Item]
+        var filesCount: Int
+        var filesBytes: Double
+        var foldCount: Int
+        var foldBytes: Double
+    }
+
+    /// Largest children stay named. Small direct files become one files tile.
+    /// Anything else is the tail fold, and its weight is only those leftover bytes.
+    private func packChildren(store: NodeStore, id: UInt32, limit: Int) -> Packed {
+        let keep = max(1, limit)
+        struct Cand { var id: UInt32; var weight: Double; var isDir: Bool }
+        var best: [Cand] = []
+        best.reserveCapacity(keep)
+        var minIndex = 0
+        var total = 0.0
+        var fileTailCount = 0
+        var fileTailBytes = 0.0
+        var dirTailCount = 0
+        var dirTailBytes = 0.0
+        store.forEachChild(id) { child in
+            if store.flags(child).contains(.trashed) { return }
+            let weight = Double(store.bytes(child, options.metric))
+            if weight <= 0 { return }
+            total += weight
+            let isDir = store.isDirectory(child)
+            let cand = Cand(id: child, weight: weight, isDir: isDir)
+            if best.count < keep {
+                if best.isEmpty || weight < best[minIndex].weight { minIndex = best.count }
+                best.append(cand)
+                return
+            }
+            if weight <= best[minIndex].weight {
+                if isDir {
+                    dirTailCount += 1
+                    dirTailBytes += weight
+                } else {
+                    fileTailCount += 1
+                    fileTailBytes += weight
+                }
+                return
+            }
+            let dropped = best[minIndex]
+            if dropped.isDir {
+                dirTailCount += 1
+                dirTailBytes += dropped.weight
+            } else {
+                fileTailCount += 1
+                fileTailBytes += dropped.weight
+            }
+            best[minIndex] = cand
+            minIndex = 0
+            for index in best.indices where best[index].weight < best[minIndex].weight {
+                minIndex = index
+            }
+        }
+        let cutoff = total * 0.015
+        var named: [Squarify.Item] = []
+        named.reserveCapacity(best.count)
+        for cand in best.sorted(by: { $0.weight > $1.weight }) {
+            let large = cand.weight >= cutoff
+            if large && named.count < keep {
+                named.append(Squarify.Item(id: cand.id, weight: cand.weight))
+            } else if cand.isDir {
+                dirTailCount += 1
+                dirTailBytes += cand.weight
+            } else {
+                fileTailCount += 1
+                fileTailBytes += cand.weight
+            }
+        }
+        return Packed(
+            named: named,
+            filesCount: fileTailCount,
+            filesBytes: fileTailBytes,
+            foldCount: dirTailCount,
+            foldBytes: dirTailBytes
+        )
+    }
+
+    private struct Covered {
+        var boxes: [LayoutBox]
+        var foldCount: Int
+        var foldBytes: Double
+        var filesCount: Int
+        var filesBytes: Double
+    }
+
+    /// Squarify named children plus the files tile plus the tail. Every byte is in exactly one box,
+    /// and the boxes fill the rect. A child that cannot hold its label joins the tail and the rest reflow.
+    private func layoutCovering(
+        store: NodeStore,
+        packed: Packed,
+        parent: UInt32,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double
+    ) -> Covered {
+        var named = packed.named
+        var foldCount = packed.foldCount
+        var foldBytes = packed.foldBytes
+        var filesCount = packed.filesCount
+        var filesBytes = packed.filesBytes
+        func lay() -> [LayoutBox] {
+            var batch = named
+            if filesCount > 0, filesBytes > 0 {
+                batch.append(Squarify.Item(id: TileFold.filesID(parent: parent), weight: filesBytes))
+            }
+            if foldCount > 0, foldBytes > 0 {
+                batch.append(Squarify.Item(id: TileFold.remainderID(parent: parent), weight: foldBytes))
+            }
+            guard !batch.isEmpty, width > 1, height > 1 else { return [] }
+            if batch.count == 1 {
+                return [LayoutBox(id: batch[0].id, x: x, y: y, width: width, height: height)]
+            }
+            return Squarify.layout(items: batch, x: x, y: y, width: width, height: height, gap: options.gap)
+        }
+        func fits(_ box: LayoutBox) -> Bool {
+            if TileFold.isRemainder(box.id) {
+                let name = "\(max(foldCount, 1)) smaller items"
+                return labelFits(name: name, bytes: UInt64(max(0, foldBytes.rounded())), width: box.width, height: box.height, header: 0)
+            }
+            if TileFold.isFiles(box.id) {
+                let name = "\(max(filesCount, 1)) files"
+                return labelFits(name: name, bytes: UInt64(max(0, filesBytes.rounded())), width: box.width, height: box.height, header: 0)
+            }
+            let name = store.name(of: box.id)
+            let bytes = store.bytes(box.id, options.metric)
+            let tooSmall = box.width + 0.5 < options.minTileWidth || box.height + 0.5 < options.minTileHeight
+            return !tooSmall && labelFits(name: name, bytes: bytes, width: box.width, height: box.height, header: 0)
+        }
+        var boxes = lay()
+        for _ in 0..<12 {
+            let unfit = boxes.filter { !fits($0) && !TileFold.isRemainder($0.id) && !TileFold.isFiles($0.id) }
+            guard let victim = unfit.min(by: { $0.width * $0.height < $1.width * $1.height }),
+                  let item = named.first(where: { $0.id == victim.id }),
+                  named.count > 1 else { break }
+            named.removeAll { $0.id == item.id }
+            if store.isDirectory(item.id) {
+                foldCount += 1
+                foldBytes += item.weight
+            } else {
+                filesCount += 1
+                filesBytes += item.weight
+            }
+            boxes = lay()
+        }
+        // A tail that cannot be read is removed and the named tiles are laid out again, filling the rect.
+        if boxes.contains(where: { TileFold.isRemainder($0.id) && !fits($0) }) {
+            foldCount = 0
+            foldBytes = 0
+            boxes = lay()
+        }
+        if boxes.contains(where: { TileFold.isFiles($0.id) && !fits($0) }) {
+            filesCount = 0
+            filesBytes = 0
+            boxes = lay()
+        }
+        if boxes.isEmpty, let only = packed.named.max(by: { $0.weight < $1.weight }) {
+            boxes = [LayoutBox(id: only.id, x: x, y: y, width: width, height: height)]
+        }
+        return Covered(boxes: boxes, foldCount: foldCount, foldBytes: foldBytes, filesCount: filesCount, filesBytes: filesBytes)
     }
 
     private struct Gathered {
@@ -478,6 +637,11 @@ public enum TileFold {
     public static func remainderID(parent: UInt32) -> UInt32 { parent | 0x8000_0000 }
     public static func isRemainder(_ id: UInt32) -> Bool { id >= 0x8000_0000 }
     public static func remainderParent(_ id: UInt32) -> UInt32 { id & 0x7FFF_FFFF }
+
+    /// Direct files that are too small to name on their own. Not a directory fold.
+    public static func filesID(parent: UInt32) -> UInt32 { parent | 0x4000_0000 }
+    public static func isFiles(_ id: UInt32) -> Bool { (id & 0xC000_0000) == 0x4000_0000 }
+    public static func filesParent(_ id: UInt32) -> UInt32 { id & 0x3FFF_FFFF }
 
     /// Drop children that cannot cover `minimumExtent` on both sides. Their weight becomes one remainder tile when that pile is large enough to draw; otherwise squarify gives the space to the tiles that remain.
     public static func prepare(
@@ -805,7 +969,7 @@ public enum LayoutAudit {
                 sizeText: ByteFormat.bytes(node.sizeBytes),
                 tileWidth: node.width,
                 tileHeight: node.height,
-                header: 0
+                header: node.header
             )
             if node.label.isEmpty || !node.showsLabel || !fits {
                 unlabeled += 1

@@ -116,6 +116,15 @@ jobs:
             --snapshot-scheme dark
           find /tmp/quadrat-messy -mindepth 1 -maxdepth 1 ! -name perf.json ! -name 'messy-*.png' -exec rm -rf {} +
 
+      - name: Wide directory zoom
+        run: |
+          mkdir -p /tmp/quadrat-zoom
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" --zoom-wide \
+            --out /tmp/quadrat-zoom/perf.json \
+            > /tmp/quadrat-zoom/stdout.txt 2> /tmp/quadrat-zoom/time.txt
+          python3 scripts/check_wide_zoom.py /tmp/quadrat-zoom/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-zoom/time.txt
+
       - name: Leaf tile pixel check
         run: |
           mkdir -p /tmp/quadrat-pixel

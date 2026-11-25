@@ -29,6 +29,9 @@ enum SnapshotRunner {
                     FileHandle.standardError.write(Data("failed to render \(url.lastPathComponent)\n".utf8))
                     exit(1)
                 }
+                if index >= 3 {
+                    requireLabels(model.picture, context: url.lastPathComponent)
+                }
             }
         }
     }
@@ -148,6 +151,7 @@ enum SnapshotRunner {
             FileHandle.standardError.write(Data("failed to render \(out)\n".utf8))
             exit(1)
         }
+        requireLabels(model.picture, context: url.lastPathComponent)
     }
 
     /// Volume root, home, and one drill-in, each in light and dark. Each root is scanned once.
@@ -215,6 +219,29 @@ enum SnapshotRunner {
             FileHandle.standardError.write(Data("failed to render \(path)\n".utf8))
             exit(1)
         }
+        requireLabels(model.picture, context: URL(fileURLWithPath: path).lastPathComponent)
+    }
+
+    /// Every drawn tile, including folds, file aggregates and gray tiles, has a label that fits.
+    private static func requireLabels(_ picture: MapPicture, context: String) {
+        var unlabeled = 0
+        for tile in picture.tiles {
+            let fits = LabelFit.fits(
+                name: tile.name,
+                sizeText: tile.sizeText,
+                tileWidth: tile.width,
+                tileHeight: tile.height,
+                header: tile.header
+            )
+            if tile.name.isEmpty || !tile.showsLabel || !fits {
+                unlabeled += 1
+            }
+        }
+        if unlabeled > 0 {
+            FileHandle.standardError.write(Data("unlabeledTiles \(unlabeled) in \(context) (\(picture.tiles.count) tiles)\n".utf8))
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("unlabeledTiles 0 in \(context)\n".utf8))
     }
 
     private static func write<V: View>(_ view: V, to url: URL) -> Bool {

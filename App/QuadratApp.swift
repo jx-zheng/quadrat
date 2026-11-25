@@ -65,6 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             SnapshotRunner.render(path: path, to: out, scheme: scheme, drill: args.contains("--snapshot-drill"))
             exit(0)
         }
+        if args.contains("--zoom-wide") {
+            PerfRunner.runWideZoom(arguments: args)
+            exit(0)
+        }
         if let path = argument("--perf-path", in: args) {
             PerfRunner.runPath(directory: path, arguments: args)
             exit(0)

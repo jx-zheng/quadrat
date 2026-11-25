@@ -831,7 +831,7 @@ struct SidebarView: View {
                 sidebarRow(
                     symbol: volume.symbol,
                     title: volume.name,
-                    trailing: volume.isNetwork ? "Network" : (model.phase == .scanning && volume.id == model.activeVolume?.id ? "Scanning…" : (volume.isStartup ? (model.activeVolume?.usedText ?? volume.usedText) : volume.usedText)),
+                    trailing: diskTrailing(volume),
                     selected: volume.id == (model.activeVolume?.id ?? model.selectedVolumeID)
                 ) {
                     model.choose(volume)
@@ -868,6 +868,19 @@ struct SidebarView: View {
         sidebarRow(symbol: symbol, title: title, trailing: jumpSize(needle), selected: false) {
             model.jump(to: needle == "you" ? "you" : needle)
         }
+    }
+
+    /// A folder root shows that folder's scanned size. A volume shows the volume's used space.
+    private func diskTrailing(_ volume: DiskVolume) -> String {
+        if volume.isNetwork { return "Network" }
+        if model.phase == .scanning && volume.id == model.activeVolume?.id { return "Scanning…" }
+        if volume.detail.hasPrefix("On "), model.store.rootID != 0 {
+            return ByteFormat.bytes(model.nodeBytes(model.store.rootID))
+        }
+        if volume.isStartup, let active = model.activeVolume, active.id == volume.id {
+            return active.usedText
+        }
+        return volume.usedText
     }
 
     private func jumpSize(_ needle: String) -> String {

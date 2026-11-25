@@ -54,11 +54,13 @@ struct MapPicture: Equatable {
         tiles.reserveCapacity(layout.nodes.count)
         for node in layout.nodes where node.id != root || node.header > 0 {
             if node.id == root { continue }
+            let files = TileFold.isFiles(node.id)
             let remainder = node.isRemainder || TileFold.isRemainder(node.id)
-            let source = remainder ? TileFold.remainderParent(node.id) : node.id
-            let flags = remainder ? NodeFlags() : store.flags(node.id)
+            let source = files ? TileFold.filesParent(node.id) : (remainder ? TileFold.remainderParent(node.id) : node.id)
+            let flags = (remainder || files) ? NodeFlags() : store.flags(node.id)
             let bytes = node.sizeBytes > 0 ? node.sizeBytes : store.bytes(source, metric)
-            let kind = remainder ? store.kind(source) : store.kind(node.id)
+            // A fold or a files tile takes its parent's kind, so Applications stays the apps colour.
+            let kind = (remainder || files) ? store.kind(source) : store.kind(node.id)
             let name = node.label.isEmpty
                 ? (remainder ? "\(max(node.foldedCount, 1)) smaller items" : store.name(of: node.id))
                 : node.label

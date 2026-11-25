@@ -41,7 +41,7 @@ public enum KindClassifier {
         if lower == "node_modules" || lower == ".npm" || lower == "bower_components" {
             return .nodeModules
         }
-        if lower.hasSuffix(".app") { return .apps }
+        if lower == "applications" || lower.hasSuffix(".app") { return .apps }
         if isBuildName(lower) { return .builds }
         if isCacheName(lower) { return .caches }
         if lower.contains("backup") || lower == ".trash" || lower == "trash" { return .backups }
