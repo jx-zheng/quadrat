@@ -114,6 +114,7 @@ public struct TreemapLayout: Equatable, Sendable {
         guard rootID != 0, width > 0, height > 0 else { return layout }
         layout.root = layout.place(store: store, id: rootID, x: 0, y: 0, width: width, height: height, depth: 0)
         layout.absorbSingleChildFolders(store: store)
+        layout.ensureEveryTileHasALabel()
         layout.index = TileGrid.build(nodes: layout.nodes, root: layout.root)
         return layout
     }
@@ -181,6 +182,34 @@ public struct TreemapLayout: Equatable, Sendable {
             for child in childIndex[node.childStart..<(node.childStart + node.childCount)] {
                 stack.append(child)
             }
+        }
+    }
+
+    /// A tile that cannot show its name is not drawn. A long chain shortens to a name that fits.
+    private mutating func ensureEveryTileHasALabel() {
+        for index in nodes.indices {
+            let node = nodes[index]
+            guard node.depth > 0, node.width > 1, node.height > 1 else { continue }
+            func fits(_ name: String, header: Double) -> Bool {
+                labelFits(name: name, bytes: node.sizeBytes, width: node.width, height: node.height, header: header)
+            }
+            if fits(node.label, header: node.header) { continue }
+            let parts = node.label.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let short = parts.last ?? node.label
+            if fits(short, header: node.header) {
+                nodes[index].label = short
+                nodes[index].showsLabel = true
+                continue
+            }
+            if node.header > 0, fits(short, header: 0) {
+                nodes[index].header = 0
+                nodes[index].label = short
+                nodes[index].showsLabel = true
+                continue
+            }
+            nodes[index].width = 0
+            nodes[index].height = 0
+            nodes[index].showsLabel = false
         }
     }
 
@@ -1045,7 +1074,7 @@ public enum LayoutAudit {
         )
         var tiles = 0
         var unlabeled = 0
-        for node in layout.nodes where node.depth > 0 {
+        for node in layout.nodes where node.depth > 0 && node.width > 1 && node.height > 1 {
             tiles += 1
             let fits = LabelFit.fits(
                 name: node.label,
