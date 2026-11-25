@@ -910,6 +910,50 @@ final class ReadableTileTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(origin.y, HoverCardLayout.padding)
     }
 
+
+    func testSynthShapedRootHasNoUnlabeledTiles() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let you = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        _ = store.addNode(parent: you, name: "Documents", allocBytes: 20_000_000_000, logicalBytes: 20_000_000_000, kind: .documents, flags: .directory)
+        let apps = store.addNode(parent: root, name: "Applications", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        for index in 0..<40 {
+            let bytes = UInt64(40 - index) * 400_000_000
+            _ = store.addNode(parent: apps, name: "App \(index).app", allocBytes: bytes, logicalBytes: bytes, kind: .apps, flags: [])
+        }
+        let sys = store.addNode(parent: root, name: "System", allocBytes: 0, logicalBytes: 0, kind: .system, flags: .directory)
+        let lib = store.addNode(parent: sys, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .system, flags: .directory)
+        let assets = store.addNode(parent: lib, name: "AssetsV2", allocBytes: 0, logicalBytes: 0, kind: .system, flags: .directory)
+        for index in 0..<80 {
+            let bytes: UInt64 = 200_000_000
+            _ = store.addNode(parent: assets, name: String(format: "com_apple_%08x", index), allocBytes: bytes, logicalBytes: bytes, kind: .system, flags: [])
+        }
+        for index in 0..<200 {
+            let bytes = UInt64((index % 20) + 1) * 50_000_000
+            let folder = store.addNode(parent: root, name: "d\(index)", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+            for file in 0..<30 {
+                _ = store.addNode(parent: folder, name: "f\(file)", allocBytes: bytes / 30, logicalBytes: bytes / 30, kind: .other, flags: [])
+            }
+        }
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: store.rootID, width: 1200, height: 800,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        var bad: [String] = []
+        for node in layout.nodes where node.depth > 0 && node.width > 1 && node.height > 1 {
+            let fits = LabelFit.fits(
+                name: node.label, sizeText: ByteFormat.bytes(node.sizeBytes),
+                tileWidth: node.width, tileHeight: node.height, header: node.header
+            )
+            if node.label.isEmpty || !node.showsLabel || !fits {
+                bad.append("\(node.label) \(Int(node.width))x\(Int(node.height)) h=\(Int(node.header)) show=\(node.showsLabel) fits=\(fits)")
+            }
+        }
+        XCTAssertTrue(bad.isEmpty, "unlabeled \(bad.count): \(bad.prefix(20))")
+    }
+
     private func wideFolder(named: String, count: Int) -> NodeStore {
         var store = NodeStore()
         let root = store.addRoot(name: "disk")

@@ -117,6 +117,7 @@ public struct TreemapLayout: Equatable, Sendable {
         layout.root = layout.place(store: store, id: rootID, x: 0, y: 0, width: width, height: height, depth: 0)
         layout.absorbSingleChildFolders(store: store)
         layout.fillEmptyHeaders(store: store)
+        layout.ensureEveryVisibleTileIsLabelled(store: store)
         layout.index = TileGrid.build(nodes: layout.nodes, root: layout.root)
         return layout
     }
@@ -219,9 +220,8 @@ public struct TreemapLayout: Equatable, Sendable {
             guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
             if !labelFits(name: nodes[index].label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) {
                 let leafName = store.name(of: node.id)
-                if labelFits(name: leafName, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) {
-                    nodes[index].label = leafName
-                }
+                guard labelFits(name: leafName, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) else { continue }
+                nodes[index].label = leafName
             }
             nodes[index].header = header
             _ = installChildren(
@@ -229,6 +229,46 @@ public struct TreemapLayout: Equatable, Sendable {
                 x: node.x, y: node.y, width: node.width, height: node.height,
                 depth: node.depth, header: header
             )
+        }
+    }
+
+
+    /// A visible tile must draw a full name and size. Try a shorter name or drop the
+    /// header; hide only slivers that cannot hold a label.
+    private mutating func ensureEveryVisibleTileIsLabelled(store: NodeStore) {
+        for index in nodes.indices {
+            let node = nodes[index]
+            guard node.depth > 0, node.width > 1, node.height > 1 else { continue }
+            if node.showsLabel, labelFits(name: node.label, bytes: node.sizeBytes, width: node.width, height: node.height, header: node.header) {
+                continue
+            }
+            let candidates = [node.label, node.headerTitle, store.name(of: node.id)].filter { !$0.isEmpty }
+            var fixed = false
+            for name in candidates {
+                if labelFits(name: name, bytes: node.sizeBytes, width: node.width, height: node.height, header: node.header) {
+                    nodes[index].label = name
+                    nodes[index].showsLabel = true
+                    fixed = true
+                    break
+                }
+            }
+            if fixed { continue }
+            if node.header > 0 {
+                for name in candidates {
+                    if labelFits(name: name, bytes: node.sizeBytes, width: node.width, height: node.height, header: 0) {
+                        nodes[index].label = name
+                        nodes[index].header = 0
+                        nodes[index].showsLabel = true
+                        fixed = true
+                        break
+                    }
+                }
+            }
+            if fixed { continue }
+            nodes[index].width = 0
+            nodes[index].height = 0
+            nodes[index].showsLabel = false
+            nodes[index].childCount = 0
         }
     }
 
