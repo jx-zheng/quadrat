@@ -414,8 +414,8 @@ enum SnapshotRunner {
 
     private static func makeHover() -> AppModel {
         let model = mapped()
-        if let docker = find(model, named: "Docker.raw") {
-            model.hover = docker
+        if let target = firstVisible(model, names: ["Docker.raw", "originals", "Final Cut Library.fcpbundle", "Xcode.app"]) {
+            model.hover = target
             model.selection = nil
         }
         return model
@@ -466,5 +466,17 @@ enum SnapshotRunner {
         model.store.largestDescendant(under: model.store.rootID) {
             model.store.name(of: $0) == name
         }
+    }
+
+    /// Prefer a requested name only if that node is actually drawn on the map.
+    private static func firstVisible(_ model: AppModel, names: [String]) -> UInt32? {
+        let visible = Set(model.picture.tiles.filter { $0.width > 1 && $0.height > 1 }.map(\.id))
+        for name in names {
+            if let id = find(model, named: name), visible.contains(id) { return id }
+        }
+        return model.picture.tiles
+            .filter { $0.width > 1 && $0.height > 1 && $0.showsLabel }
+            .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })?
+            .id
     }
 }
