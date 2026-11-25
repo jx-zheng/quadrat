@@ -193,23 +193,24 @@ final class TreemapMapView: NSView {
 
     private func addHatch(to box: CALayer, size: CGSize, scale: CGFloat) {
         let spacing: CGFloat = 8
+        let path = CGMutablePath()
         var x = -size.height
         while x < size.width {
-            let line = CAShapeLayer()
-            line.name = "hatch"
-            line.contentsScale = scale
-            line.shouldRasterize = false
-            let path = CGMutablePath()
             path.move(to: CGPoint(x: x, y: size.height))
             path.addLine(to: CGPoint(x: x + size.height, y: 0))
-            line.path = path
-            line.strokeColor = NSColor.white.withAlphaComponent(0.35).cgColor
-            line.lineWidth = 1
-            line.frame = CGRect(origin: .zero, size: size)
-            line.zPosition = 0
-            box.insertSublayer(line, at: 0)
             x += spacing
         }
+        let line = CAShapeLayer()
+        line.name = "hatch"
+        line.contentsScale = scale
+        line.shouldRasterize = false
+        line.path = path
+        line.strokeColor = NSColor.white.withAlphaComponent(0.35).cgColor
+        line.lineWidth = 1
+        line.fillColor = nil
+        line.frame = CGRect(origin: .zero, size: size)
+        line.zPosition = 0
+        box.insertSublayer(line, at: 0)
     }
 
     private func ensurePool(count: Int) {

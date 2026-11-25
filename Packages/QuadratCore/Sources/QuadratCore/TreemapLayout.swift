@@ -51,10 +51,12 @@ public struct TreemapOptions: Equatable, Sendable {
             metric: metric,
             headerHeight: 0,
             maxHeaderDepth: 0,
+            minRecurseWidth: 40,
+            minRecurseHeight: 36,
             // Two levels of named children under the current root. Three is the ceiling.
             maxVisibleDepth: 3,
             minTileWidth: 40,
-            minTileHeight: 24,
+            minTileHeight: 36,
             maxTiles: 60
         )
     }
@@ -114,7 +116,6 @@ public struct TreemapLayout: Equatable, Sendable {
         guard rootID != 0, width > 0, height > 0 else { return layout }
         layout.root = layout.place(store: store, id: rootID, x: 0, y: 0, width: width, height: height, depth: 0)
         layout.absorbSingleChildFolders(store: store)
-        layout.ensureEveryTileHasALabel()
         layout.index = TileGrid.build(nodes: layout.nodes, root: layout.root)
         return layout
     }
@@ -146,13 +147,24 @@ public struct TreemapLayout: Equatable, Sendable {
                 } else {
                     combined = "\(node.label) / \(child.label)"
                 }
-                nodes[index].label = combined
-                nodes[index].headerTitle = combined
+                // Keep the tile. A long chain title falls back to a name that still fits;
+                // never leave a hole or a nameless strip.
                 if nodes[index].header < 1 { nodes[index].header = max(child.header, 18) }
-                nodes[index].showsLabel = labelFits(
-                    name: combined, bytes: nodes[index].sizeBytes,
-                    width: nodes[index].width, height: nodes[index].height, header: nodes[index].header
-                )
+                let header = nodes[index].header
+                let bytes = nodes[index].sizeBytes
+                let candidates = [combined, child.label, node.label, store.name(of: node.id), store.name(of: child.id)]
+                var chosen = combined
+                var ok = false
+                for name in candidates where !name.isEmpty {
+                    if labelFits(name: name, bytes: bytes, width: node.width, height: node.height, header: header) {
+                        chosen = name
+                        ok = true
+                        break
+                    }
+                }
+                nodes[index].label = chosen
+                nodes[index].headerTitle = combined
+                nodes[index].showsLabel = ok
                 let shift = (child.y + child.header) - (nodes[index].y + nodes[index].header)
                 nodes[index].childStart = child.childStart
                 nodes[index].childCount = child.childCount
@@ -186,33 +198,6 @@ public struct TreemapLayout: Equatable, Sendable {
     }
 
     /// A tile that cannot show its name is not drawn. A long chain shortens to a name that fits.
-    private mutating func ensureEveryTileHasALabel() {
-        for index in nodes.indices {
-            let node = nodes[index]
-            guard node.depth > 0, node.width > 1, node.height > 1 else { continue }
-            func fits(_ name: String, header: Double) -> Bool {
-                labelFits(name: name, bytes: node.sizeBytes, width: node.width, height: node.height, header: header)
-            }
-            if fits(node.label, header: node.header) { continue }
-            let parts = node.label.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            let short = parts.last ?? node.label
-            if fits(short, header: node.header) {
-                nodes[index].label = short
-                nodes[index].showsLabel = true
-                continue
-            }
-            if node.header > 0, fits(short, header: 0) {
-                nodes[index].header = 0
-                nodes[index].label = short
-                nodes[index].showsLabel = true
-                continue
-            }
-            nodes[index].width = 0
-            nodes[index].height = 0
-            nodes[index].showsLabel = false
-        }
-    }
-
     public func children(of index: Int) -> ArraySlice<Int> {
         guard nodes.indices.contains(index) else { return [] }
         let node = nodes[index]

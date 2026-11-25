@@ -100,7 +100,7 @@ enum PerfRunner {
         var bestJSON: [String: Any] = [:]
         var bestRate = -1.0
         var store = NodeStore()
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             let phase = scan(path: session.scanRoot, displayName: session.volume.name)
             let rate = phase.json["itemsPerSecond"] as? Double ?? 0
             if rate >= bestRate {
@@ -112,7 +112,7 @@ enum PerfRunner {
         }
         VolumeMode.addUnscannedGap(store: &store, volume: session.volume)
         var scanJSON = bestJSON
-        scanJSON["passes"] = 3
+        scanJSON["passes"] = 5
         scanJSON["path"] = session.scanRoot
         let audit = LayoutAudit.check(store: store)
         let frames = RenderBench.measureInteraction(store: store, width: 1440, height: 900, scale: 2)

@@ -22,6 +22,15 @@ final class ByteFormatTests: XCTestCase {
         XCTAssertEqual(ByteFormat.grouped(0), "0")
         XCTAssertEqual(ByteFormat.percent(58_000_000_000, of: 1_000_000_000_000), "5.8%")
         XCTAssertEqual(ByteFormat.percent(870, of: 1000), "87.0%")
+        XCTAssertEqual(ByteFormat.percent(866_000_000_000, of: 995_000_000_000), "87.0%")
+    }
+
+    func testVolumeUsedIsCapacityMinusFree() {
+        let share = DiskShare(capacity: 995_000_000_000, free: 129_000_000_000, volumeName: "Macintosh HD")
+        let used = share.capacity - share.free
+        XCTAssertEqual(used, 866_000_000_000)
+        XCTAssertEqual(ByteFormat.bytes(used), "866 GB")
+        XCTAssertEqual(ByteFormat.percent(used, of: share.capacity), "87.0%")
     }
 }
 
@@ -698,6 +707,33 @@ final class ReadableTileTests: XCTestCase {
         }
     }
 
+    func testThinSiblingsFoldInsteadOfUnlabeledStrips() {
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let apps = store.addNode(parent: root, name: "Applications", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        for index in 0..<24 {
+            let name = index == 0 ? "Xcode.app" : "App\(index).app"
+            let bytes: UInt64 = index == 0 ? 20_000_000_000 : 800_000_000
+            let app = store.addNode(parent: apps, name: name, allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+            let contents = store.addNode(parent: app, name: "Contents", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+            _ = store.addNode(parent: contents, name: "MacOS", allocBytes: bytes, logicalBytes: bytes, kind: .apps, flags: [])
+        }
+        let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let you = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        let library = store.addNode(parent: you, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .developer, flags: .directory)
+        _ = store.addNode(parent: library, name: "Caches", allocBytes: 40_000_000_000, logicalBytes: 40_000_000_000, kind: .developer, flags: [])
+        store.recomputeAll()
+        assertEveryTileIsLabelled(store)
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1440, height: 900,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        let labels = layout.nodes.filter { $0.depth > 0 && $0.width > 1 && $0.height > 1 }.map(\.label)
+        XCTAssertTrue(labels.contains { $0 == "Users / you" || $0.hasPrefix("Users / you") }, "labels \(labels)")
+        XCTAssertFalse(labels.contains("Contents"))
+        XCTAssertEqual(LayoutAudit.check(store: store, width: 1440, height: 900).unlabeled, 0)
+    }
+
     func testFolderShareStaysInsideTheDisk() {
         let share = DiskShare(capacity: 1_000_000_000_000, free: 800_000_000_000, volumeName: "Macintosh HD")
         XCTAssertGreaterThan(share.capacity, 0)
@@ -740,6 +776,15 @@ final class ReadableTileTests: XCTestCase {
         let report = LayoutAudit.check(store: store)
         XCTAssertGreaterThan(report.tiles, 0, file: file, line: line)
         XCTAssertEqual(report.unlabeled, 0, "unlabeled \(report.unlabeled) of \(report.tiles)", file: file, line: line)
+        let layout = TreemapLayout.build(
+            store: store, rootID: store.rootID, width: 1200, height: 800,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        for node in layout.nodes where node.depth > 0 && node.width > 1 && node.height > 1 {
+            XCTAssertFalse(LabelFit.tooThin(width: node.width, height: node.height), node.label, file: file, line: line)
+            XCTAssertFalse(node.label.isEmpty, file: file, line: line)
+            XCTAssertTrue(node.showsLabel, node.label, file: file, line: line)
+        }
     }
 }
 
