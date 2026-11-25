@@ -511,23 +511,31 @@ public struct TreemapLayout: Equatable, Sendable {
                 let name = "\(max(filesCount, 1)) files"
                 return labelFits(name: name, bytes: UInt64(max(0, filesBytes.rounded())), width: box.width, height: box.height, header: 0)
             }
-            let name = store.name(of: box.id)
-            let bytes = store.bytes(box.id, options.metric)
+            let chain = ChainCollapse.resolve(store: store, start: box.id, metric: options.metric)
+            let leaf = store.name(of: chain.leaf)
+            let bytes = store.bytes(chain.leaf, options.metric)
             let tooSmall = box.width + 0.5 < options.minTileWidth || box.height + 0.5 < options.minTileHeight
+            let titleFits = !chain.title.isEmpty && labelFits(
+                name: chain.title, bytes: bytes, width: box.width, height: box.height, header: 0
+            )
+            let name = titleFits ? chain.title : leaf
             return !tooSmall && labelFits(name: name, bytes: bytes, width: box.width, height: box.height, header: 0)
         }
+        // Keep the largest prefix whose labels fit, so a crowded folder shows as many
+        // names as it can and the tail fold stays as small as the labels allow.
+        let ranked = named.sorted { $0.weight > $1.weight }
+        var chosen = ranked.count
         var boxes = lay()
-        for _ in 0..<16 {
-            let unfit = boxes.filter { !fits($0) && !TileFold.isRemainder($0.id) && !TileFold.isFiles($0.id) }
-            guard let victim = unfit.min(by: { $0.width * $0.height < $1.width * $1.height }),
-                  let item = named.first(where: { $0.id == victim.id }) else { break }
-            named.removeAll { $0.id == item.id }
-            if store.isDirectory(item.id) {
+        while chosen > 1 && boxes.contains(where: { !fits($0) && !TileFold.isRemainder($0.id) && !TileFold.isFiles($0.id) }) {
+            chosen -= 1
+            let dropped = ranked[chosen]
+            named.removeAll { $0.id == dropped.id }
+            if store.isDirectory(dropped.id) {
                 foldCount += 1
-                foldBytes += item.weight
+                foldBytes += dropped.weight
             } else {
                 filesCount += 1
-                filesBytes += item.weight
+                filesBytes += dropped.weight
             }
             boxes = lay()
         }
