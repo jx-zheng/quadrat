@@ -150,25 +150,10 @@ enum PerfRunner {
     /// Zoom into directories that each hold 50k entries. The p99 has to stay under a frame.
     static func runWideZoom(arguments: [String]) {
         let out = value(after: "--out", in: arguments)
-        var store = NodeStore()
-        let root = store.addRoot(name: "home")
-        let folders = ["Library", "Pictures", "Developer"]
-        var widest = 0
-        for name in folders {
-            let directory = store.addNode(
-                parent: root, name: name, allocBytes: 0, logicalBytes: 0,
-                kind: .developer, flags: .directory
-            )
-            for index in 0..<50_000 {
-                let bytes = UInt64((index % 64) + 1) * 4_096
-                _ = store.addNode(
-                    parent: directory, name: "e\(index)", allocBytes: bytes, logicalBytes: bytes,
-                    kind: .other, flags: []
-                )
-            }
-            widest = 50_000
-        }
-        store.recomputeAll()
+        let tree = HomeShapedTree.build(hashDirectories: 50_000, cacheHashes: 50_000, devices: 80)
+        let store = tree.store
+        let widest = 50_000
+        let folders = ["Application Support", "Caches"]
         let frames = RenderBench.measureInteraction(
             store: store, hoverSamples: 40, zoomSamples: 24, width: 1440, height: 900, scale: 2
         )
@@ -180,7 +165,8 @@ enum PerfRunner {
             "backingScale": frames.backingScale,
             "hoverDrawCount": frames.hoverDrawCount,
             "wideChildren": widest,
-            "wideDirectories": folders.count
+            "wideDirectories": folders.count,
+            "items": store.liveNodeCount
         ]
         let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         if let out {

@@ -31,9 +31,11 @@ enum SnapshotRunner {
                 }
                 if index >= 3 {
                     requireLabels(model.picture, context: url.lastPathComponent)
+                    requireNoTruncatedLabels(model.picture, context: url.lastPathComponent)
                 }
                 if index == 4 {
                     assertScreenFourAgrees(model)
+                    requireCardMissesHoverTile(model)
                 }
             }
         }
@@ -242,6 +244,12 @@ enum SnapshotRunner {
             exit(1)
         }
         FileHandle.standardError.write(Data("screen4 title \(title) sidebar \(sidebar) footer \(footer)\n".utf8))
+        let named = model.picture.tiles.filter { $0.showsLabel && !$0.name.isEmpty && $0.width > 1 && $0.height > 1 }
+        if named.count < 40 || named.count > 60 {
+            FileHandle.standardError.write(Data("screen 4 named tiles \(named.count) not in 40...60\n".utf8))
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("screen4 namedTiles \(named.count)\n".utf8))
     }
 
     /// Every drawn tile, including folds, file aggregates and gray tiles, has a label that fits.
@@ -271,6 +279,46 @@ enum SnapshotRunner {
             exit(1)
         }
         FileHandle.standardError.write(Data("unlabeledTiles 0 in \(context)\n".utf8))
+    }
+
+    /// A label is drawn only when the full name fits. A trailing ellipsis is a failure.
+    private static func requireNoTruncatedLabels(_ picture: MapPicture, context: String) {
+        let bad = picture.tiles.filter { tile in
+            tile.showsLabel && (tile.name.contains("…") || tile.name.contains("..."))
+        }
+        if !bad.isEmpty {
+            let names = bad.map { "\($0.name) \(Int($0.width))x\(Int($0.height))" }.joined(separator: ", ")
+            FileHandle.standardError.write(Data("truncatedLabels \(bad.count) in \(context): \(names)\n".utf8))
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("truncatedLabels 0 in \(context)\n".utf8))
+    }
+
+    /// The hover card sits offset from the cursor and must not cover the highlighted tile.
+    private static func requireCardMissesHoverTile(_ model: AppModel) {
+        guard let hover = model.hover,
+              let tile = model.picture.tiles.first(where: { $0.id == hover && $0.width > 1 && $0.height > 1 }) else {
+            FileHandle.standardError.write(Data("screen 4 has no hover tile for the card gate\n".utf8))
+            exit(1)
+        }
+        let tileRect = HoverCardLayout.Rect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
+        let cursorX = tile.x + min(24, tile.width / 2)
+        let cursorY = tile.y + min(24, tile.height / 2)
+        let boundsW = max(model.viewport.width, 1200)
+        let boundsH = max(model.viewport.height, 760)
+        let origin = HoverCardLayout.origin(
+            cursorX: cursorX, cursorY: cursorY, tile: tileRect,
+            boundsWidth: boundsW, boundsHeight: boundsH
+        )
+        let card = HoverCardLayout.Rect(
+            x: origin.x, y: origin.y,
+            width: HoverCardLayout.cardWidth, height: HoverCardLayout.cardHeight
+        )
+        if card.intersects(tileRect) {
+            FileHandle.standardError.write(Data("hover card occludes tile \(tile.name) card=\(Int(card.x)),\(Int(card.y)) \(Int(card.width))x\(Int(card.height)) tile=\(Int(tile.x)),\(Int(tile.y)) \(Int(tile.width))x\(Int(tile.height))\n".utf8))
+            exit(1)
+        }
+        FileHandle.standardError.write(Data("hoverCardMissesTile \(tile.name)\n".utf8))
     }
 
     private static func write<V: View>(_ view: V, to url: URL) -> Bool {

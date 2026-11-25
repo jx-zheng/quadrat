@@ -379,13 +379,18 @@ final class AppModel: ObservableObject {
         guard let match = store.largestDescendant(under: store.rootID, where: {
             store.name(of: $0).caseInsensitiveCompare(needle) == .orderedSame || store.path(of: $0).localizedCaseInsensitiveContains(needle)
         }) else { return }
-        if store.isDirectory(match) {
-            zoomStack = Array(store.chain(to: match).dropFirst())
+        jump(to: match)
+    }
+
+    func jump(to id: UInt32) {
+        guard store.rootID != 0, id != 0 else { return }
+        if store.isDirectory(id) {
+            zoomStack = id == store.rootID ? [] : Array(store.chain(to: id).dropFirst())
             selection = nil
         } else {
-            let parent = store.parent[Int(match)]
+            let parent = store.parent[Int(id)]
             zoomStack = parent == store.rootID ? [] : Array(store.chain(to: parent).dropFirst())
-            selection = match
+            selection = id
         }
         rebuildPicture()
     }

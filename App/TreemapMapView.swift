@@ -12,6 +12,7 @@ final class TreemapMapView: NSView {
     var backingScale: CGFloat = 2
     var drawRects: [NSRect] = []
     var onHoverID: ((UInt32?) -> Void)?
+    var onHoverPoint: ((CGPoint) -> Void)?
     var onClick: ((CGPoint) -> Void)?
 
     private let tilesLayer = CALayer()
@@ -113,6 +114,7 @@ final class TreemapMapView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let id = moveHover(to: point)
+        onHoverPoint?(point)
         onHoverID?(id)
     }
 
@@ -174,14 +176,28 @@ final class TreemapMapView: NSView {
                     band.frame = CGRect(x: 0, y: 0, width: rect.width, height: tile.header)
                     band.backgroundColor = NSColor.black.withAlphaComponent(scheme == .dark ? 0.28 : 0.16).cgColor
                     label.frame = CGRect(x: 8, y: 1, width: max(0, rect.width - 16), height: max(0, tile.header - 2))
-                    label.string = "\(tile.name)  \(tile.sizeText)"
+                    let headerAvailable = max(0, rect.width - 16)
+                    let nameWidth = Double(tile.name.count) * 7.6
+                    let sizeWidth = Double(tile.sizeText.count) * 6.8
+                    if nameWidth + sizeWidth + 10 <= headerAvailable {
+                        label.string = "\(tile.name)  \(tile.sizeText)"
+                    } else {
+                        label.string = tile.name
+                    }
+                    label.isWrapped = false
                 } else {
                     band.isHidden = true
-                    label.frame = CGRect(x: 8, y: 6, width: max(0, rect.width - 16), height: min(34, max(0, rect.height - 8)))
+                    let nameWidth = Double(tile.name.count) * 7.6
+                    let available = max(0, rect.width - 16)
+                    let wraps = nameWidth > available && tile.height >= 56
+                    let textHeight = wraps ? min(64, max(0, tile.height - 8)) : min(34, max(0, tile.height - 8))
+                    label.frame = CGRect(x: 8, y: 6, width: available, height: textHeight)
                     label.string = tile.height >= 36 ? "\(tile.name)\n\(tile.sizeText)" : tile.name
+                    label.isWrapped = wraps
                 }
                 label.isHidden = !tile.showsLabel || tile.name.isEmpty
                 label.contentsScale = scale
+                label.truncationMode = .none
             } else {
                 box.isHidden = true
                 label.isHidden = true

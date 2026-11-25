@@ -393,6 +393,14 @@ struct WorkspaceView: View {
     private var currentTitle: String {
         if !model.isZoomed, let name = model.activeVolume?.name, !name.isEmpty { return name }
         guard model.store.rootID != 0 else { return "Quadrat" }
+        let chain = ChainCollapse.upward(store: model.store, from: model.zoomID, metric: model.metric)
+        if chain.names.count > 1 {
+            return ChainCollapse.titleThatFits(
+                names: chain.names,
+                width: 420,
+                bytes: model.nodeBytes(model.zoomID)
+            )
+        }
         return model.store.name(of: model.zoomID)
     }
 
@@ -495,6 +503,9 @@ struct WorkspaceView: View {
                         let next = (id == nil || id == model.zoomID) ? nil : id
                         if model.hover != next { model.hover = next }
                     },
+                    onHoverPoint: { point in
+                        if model.hoverPoint != point { model.hoverPoint = point }
+                    },
                     onClick: { point in
                         model.click(at: point)
                     }
@@ -508,8 +519,9 @@ struct WorkspaceView: View {
                     )
                 }
                 if let hover = model.hover, model.phase != .picker, !model.showTrash, let tile = picture.tiles.first(where: { $0.id == hover }) {
+                    let origin = tooltipOrigin(tile: tile, in: geo.size, cursor: model.hoverPoint)
                     TooltipCard(model: model, id: hover)
-                        .position(tooltipPosition(tile: tile, in: geo.size))
+                        .offset(x: origin.x, y: origin.y)
                 }
             }
             .onAppear { model.updateViewport(geo.size) }
@@ -533,10 +545,18 @@ struct WorkspaceView: View {
         return "Treemap of \(title). Click a folder to zoom."
     }
 
-    private func tooltipPosition(tile: TileDraw, in size: CGSize) -> CGPoint {
-        let x = min(size.width - 150, max(150, tile.x + tile.width / 2))
-        let y = min(size.height - 70, max(70, tile.y + tile.height * 0.72))
-        return CGPoint(x: x, y: y)
+    private func tooltipOrigin(tile: TileDraw, in size: CGSize, cursor: CGPoint) -> CGPoint {
+        let hasCursor = cursor.x != 0 || cursor.y != 0
+        let cursorX = hasCursor ? cursor.x : tile.x + tile.width / 2
+        let cursorY = hasCursor ? cursor.y : tile.y + tile.height / 2
+        let placed = HoverCardLayout.origin(
+            cursorX: cursorX,
+            cursorY: cursorY,
+            tile: HoverCardLayout.Rect(x: tile.x, y: tile.y, width: tile.width, height: tile.height),
+            boundsWidth: size.width,
+            boundsHeight: size.height
+        )
+        return CGPoint(x: placed.x, y: placed.y)
     }
 
     private var legend: some View {
@@ -550,6 +570,9 @@ struct WorkspaceView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
+            Text(BuildInfo.footer)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
             Text("\(ByteFormat.grouped(model.itemCountOverride ?? UInt64(model.store.rootID == 0 ? 0 : model.store.itemCount[Int(model.store.rootID)]))) items")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -617,6 +640,7 @@ struct TreemapHost: NSViewRepresentable {
     var scheme: ColorScheme
     var hover: UInt32?
     var onHover: (UInt32?) -> Void
+    var onHoverPoint: (CGPoint) -> Void
     var onClick: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> TreemapMapView {
@@ -627,6 +651,7 @@ struct TreemapHost: NSViewRepresentable {
 
     func updateNSView(_ view: TreemapMapView, context: Context) {
         view.onHoverID = onHover
+        view.onHoverPoint = onHoverPoint
         view.onClick = onClick
         view.backingScale = 2
         view.show(picture: picture, scheme: scheme)
@@ -841,10 +866,12 @@ struct SidebarView: View {
             }
             section("Jump To")
                 .padding(.top, 8)
-            jump("Home", "house", "you")
-            jump("Library/Developer", "hammer", "Developer")
-            jump("~/Developer", "folder", "Developer")
-            jump("Downloads", "arrow.down.circle", "Downloads")
+            jumpLink("Home", "house", .home)
+            jumpLink("Library/Developer", "hammer", .libraryDeveloper)
+            if jumpID(.homeDeveloper) != nil {
+                jumpLink("~/Developer", "folder", .homeDeveloper)
+            }
+            jumpLink("Downloads", "arrow.down.circle", .downloads)
             Spacer()
             if let volume = model.activeVolume ?? model.selectedVolume, !volume.isNetwork {
                 volumeFooter(volume)
@@ -864,10 +891,17 @@ struct SidebarView: View {
             .padding(.bottom, 4)
     }
 
-    private func jump(_ title: String, _ symbol: String, _ needle: String) -> some View {
-        sidebarRow(symbol: symbol, title: title, trailing: jumpSize(needle), selected: false) {
-            model.jump(to: needle == "you" ? "you" : needle)
+    private func jumpID(_ key: JumpTargets.Key) -> UInt32? {
+        JumpTargets.resolve(store: model.store, homePrefix: model.homePrefix, key: key)
+    }
+
+    private func jumpLink(_ title: String, _ symbol: String, _ key: JumpTargets.Key) -> some View {
+        let id = jumpID(key)
+        let trailing = id.map { ByteFormat.bytes(model.nodeBytes($0)) } ?? ""
+        return sidebarRow(symbol: symbol, title: title, trailing: trailing, selected: false) {
+            if let id { model.jump(to: id) }
         }
+        .disabled(id == nil)
     }
 
     /// A folder root shows that folder's scanned size. A volume shows the volume's used space.
@@ -882,16 +916,6 @@ struct SidebarView: View {
         }
         return VolumeChrome.used(volume)
     }
-
-    private func jumpSize(_ needle: String) -> String {
-        guard model.store.rootID != 0 else { return "" }
-        let match = model.store.largestDescendant(under: model.store.rootID) {
-            model.store.name(of: $0).caseInsensitiveCompare(needle) == .orderedSame
-        }
-        guard let match else { return "" }
-        return ByteFormat.bytes(model.nodeBytes(match))
-    }
-
     private func sidebarRow(symbol: String, title: String, trailing: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {

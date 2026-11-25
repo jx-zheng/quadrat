@@ -1,5 +1,19 @@
 import Foundation
 
+/// Bundles are one tile named after the bundle. Do not walk into Contents.
+public enum BundleLeaf {
+    public static let suffixes = [".app", ".jdk", ".framework", ".bundle", ".plugin", ".kext", ".xcarchive"]
+
+    public static func isLeaf(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return suffixes.contains { lower.hasSuffix($0) }
+    }
+
+    public static func name(in names: [String]) -> String? {
+        names.first { isLeaf($0) }
+    }
+}
+
 public enum ChainCollapse {
     public struct Chain: Equatable, Sendable {
         public var leaf: UInt32
@@ -15,8 +29,8 @@ public enum ChainCollapse {
         var seen: Set<UInt32> = [start]
         var steps = 0
         while steps < limit {
-            // An app bundle is one tile. Do not walk into Contents.
-            if store.name(of: leaf).lowercased().hasSuffix(".app") { break }
+            // A bundle is one tile. Do not walk into Contents.
+            if BundleLeaf.isLeaf(store.name(of: leaf)) { break }
             guard let only = soleDirectoryChild(store: store, id: leaf, metric: metric), seen.insert(only).inserted else { break }
             leaf = only
             names.append(store.name(of: only))
@@ -28,13 +42,56 @@ public enum ChainCollapse {
 
     /// `Users / you` stays a chain. `Xcode.app / Contents` is just `Xcode.app`.
     public static func displayTitle(names: [String]) -> String {
-        if let app = names.first(where: { $0.lowercased().hasSuffix(".app") }) {
-            return app
+        if let bundle = BundleLeaf.name(in: names) {
+            return bundle
         }
         let boring: Set<String> = ["contents", "macos", "resources", "frameworks", "versions", "helpers"]
         let kept = names.filter { !boring.contains($0.lowercased()) }
         let use = kept.isEmpty ? names : kept
         return use.count > 1 ? use.joined(separator: " / ") : ""
+    }
+
+    /// Walk upward while this node is the parent's only real child, so a drill-in
+    /// at "User 1" can still be titled "Anki2 / User 1".
+    public static func upward(store: NodeStore, from start: UInt32, metric: SizeMetric, limit: Int = 16) -> Chain {
+        guard start != 0 else { return Chain(leaf: start, title: "", names: []) }
+        var names = [store.name(of: start)]
+        var current = start
+        var steps = 0
+        while steps < limit, Int(current) < store.parent.count {
+            let parent = store.parent[Int(current)]
+            if parent == 0 || parent == store.rootID { break }
+            if BundleLeaf.isLeaf(store.name(of: parent)) { break }
+            guard soleDirectoryChild(store: store, id: parent, metric: metric) == current else { break }
+            names.insert(store.name(of: parent), at: 0)
+            current = parent
+            steps += 1
+        }
+        return Chain(leaf: start, title: displayTitle(names: names), names: names)
+    }
+
+    /// Full chain when it is readable, otherwise the first meaningful ancestor.
+    public static func preferredTitle(names: [String]) -> String {
+        let title = displayTitle(names: names)
+        if !title.isEmpty { return title }
+        return names.last ?? ""
+    }
+
+    /// When the full chain does not fit, use a meaningful ancestor, not the generic leaf.
+    public static func titleThatFits(names: [String], width: Double, bytes: UInt64) -> String {
+        let full = preferredTitle(names: names)
+        if full.isEmpty { return names.last ?? "" }
+        if LabelFit.fits(name: full, sizeText: ByteFormat.bytes(bytes), tileWidth: max(width, 80), tileHeight: 40, header: 0) {
+            return full
+        }
+        let boring: Set<String> = ["contents", "macos", "resources", "frameworks", "versions", "helpers"]
+        if let ancestor = names.first(where: {
+            let n = $0.lowercased()
+            return !boring.contains(n) && !OpaqueName.isHashOrUUID($0)
+        }) {
+            return ancestor
+        }
+        return names.first ?? full
     }
 
     private static func soleDirectoryChild(store: NodeStore, id: UInt32, metric: SizeMetric) -> UInt32? {
@@ -75,9 +132,19 @@ public enum LabelFit {
         let sizeWidth = Double(sizeText.count) * 6.8
         let available = tileWidth - inset * 2
         if header > 0 {
-            return header >= 16 && nameWidth + sizeWidth + 10 <= available
+            // A header may drop the size if the name alone is what fits.
+            return header >= 16 && nameWidth <= available
         }
-        return tileHeight >= minLabelHeight && nameWidth <= available && sizeWidth <= available
+        if sizeWidth > available { return false }
+        if nameWidth <= available {
+            return tileHeight >= minLabelHeight
+        }
+        // A tall tile may wrap the full name. Never clip it to a fragment.
+        guard available > 8 else { return false }
+        let lines = Int((nameWidth / available).rounded(.up))
+        if lines < 2 || lines > 3 { return false }
+        let needed = Double(lines) * 16 + 16 + 8
+        return tileHeight >= needed
     }
 
     public static let minLabelWidth: Double = 40

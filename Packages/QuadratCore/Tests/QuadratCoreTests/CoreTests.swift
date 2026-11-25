@@ -338,7 +338,7 @@ final class LayoutPolicyTests: XCTestCase {
         XCTAssertTrue(deeper.nodes.contains { $0.id == store.deeper && $0.isDepthCapped && $0.headerTitle == "deep / deeper" })
         XCTAssertFalse(deeper.nodes.contains { $0.id == store.deep })
         XCTAssertFalse(deeper.nodes.contains { store.store.name(of: $0.id) == "x" })
-        XCTAssertEqual(TreemapOptions(maxVisibleDepth: 9).maxVisibleDepth, 3)
+        XCTAssertEqual(TreemapOptions(maxVisibleDepth: 9).maxVisibleDepth, 8)
         XCTAssertEqual(TreemapOptions(maxVisibleDepth: 0).maxVisibleDepth, 1)
     }
 
@@ -367,8 +367,10 @@ final class LayoutPolicyTests: XCTestCase {
     func testLabelsRequireTheFullNameAndSize() {
         XCTAssertFalse(LabelFit.fits(name: "Application Support", sizeText: "12.4 GB", tileWidth: 52, tileHeight: 28, header: 0))
         XCTAssertTrue(LabelFit.fits(name: "Mail", sizeText: "4.2 GB", tileWidth: 220, tileHeight: 80, header: 0))
-        XCTAssertTrue(LabelFit.fits(name: "Users / jxzheng / Library", sizeText: "52.3 GB", tileWidth: 520, tileHeight: 90, header: 19))
-        XCTAssertFalse(LabelFit.fits(name: "Users / jxzheng / Library", sizeText: "52.3 GB", tileWidth: 80, tileHeight: 40, header: 19))
+        XCTAssertTrue(LabelFit.fits(name: "Final Cut Library.fcpbundle", sizeText: "61.0 GB", tileWidth: 160, tileHeight: 280, header: 0))
+        XCTAssertFalse(LabelFit.fits(name: "Final Cut Library.fcpbundle", sizeText: "61.0 GB", tileWidth: 160, tileHeight: 40, header: 0))
+        XCTAssertTrue(LabelFit.fits(name: "Users / you / Library", sizeText: "52.3 GB", tileWidth: 520, tileHeight: 90, header: 19))
+        XCTAssertFalse(LabelFit.fits(name: "Users / you / Library", sizeText: "52.3 GB", tileWidth: 80, tileHeight: 40, header: 19))
 
         var store = NodeStore()
         let root = store.addRoot(name: "disk")
@@ -404,7 +406,7 @@ final class LayoutPolicyTests: XCTestCase {
         var store = NodeStore()
         let root = store.addRoot(name: "disk")
         let users = store.addNode(parent: root, name: "Users", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
-        let person = store.addNode(parent: users, name: "jxzheng", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
+        let person = store.addNode(parent: users, name: "you", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
         let library = store.addNode(parent: person, name: "Library", allocBytes: 0, logicalBytes: 0, kind: .other, flags: .directory)
         _ = store.addNode(parent: library, name: "Mail", allocBytes: 30_000_000_000, logicalBytes: 30_000_000_000, kind: .other, flags: [])
         _ = store.addNode(parent: library, name: "Messages", allocBytes: 22_000_000_000, logicalBytes: 22_000_000_000, kind: .caches, flags: [])
@@ -414,7 +416,7 @@ final class LayoutPolicyTests: XCTestCase {
             store: store, rootID: root, width: 800, height: 500,
             options: TreemapOptions(gap: 0, maxVisibleDepth: 2, minTileWidth: 40, minTileHeight: 24)
         )
-        let chain = layout.nodes.filter { $0.headerTitle == "Users / jxzheng / Library" }
+        let chain = layout.nodes.filter { $0.headerTitle == "Users / you / Library" }
         XCTAssertEqual(chain.count, 1)
         XCTAssertEqual(chain[0].id, library)
         XCTAssertEqual(chain[0].depth, 1)
@@ -734,6 +736,61 @@ final class ReadableTileTests: XCTestCase {
         XCTAssertEqual(LayoutAudit.check(store: store, width: 1440, height: 900).unlabeled, 0)
     }
 
+    func testBundleLeavesAreNamedAndNotOpened() {
+        XCTAssertTrue(BundleLeaf.isLeaf("Xcode.app"))
+        XCTAssertTrue(BundleLeaf.isLeaf("Helper.bundle"))
+        XCTAssertFalse(BundleLeaf.isLeaf("Final Cut Library.fcpbundle"))
+        XCTAssertTrue(BundleLeaf.isLeaf("Temurin.jdk"))
+        XCTAssertTrue(BundleLeaf.isLeaf("Swift.framework"))
+        XCTAssertTrue(BundleLeaf.isLeaf("QuickLook.plugin"))
+        XCTAssertTrue(BundleLeaf.isLeaf("AppleHDA.kext"))
+        XCTAssertTrue(BundleLeaf.isLeaf("Archive.xcarchive"))
+        XCTAssertFalse(BundleLeaf.isLeaf("Applications"))
+        XCTAssertFalse(BundleLeaf.isLeaf("Photos Library.photoslibrary"))
+        XCTAssertEqual(ChainCollapse.displayTitle(names: ["Temurin.jdk", "Contents", "Home"]), "Temurin.jdk")
+
+        var store = NodeStore()
+        let root = store.addRoot(name: "Macintosh HD")
+        let apps = store.addNode(parent: root, name: "Applications", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+        for name in ["Xcode.app", "Support.jdk", "Foo.framework", "Bar.bundle", "Quick.plugin", "IO.kext", "Build.xcarchive"] {
+            let bundle = store.addNode(parent: apps, name: name, allocBytes: 8_000_000_000, logicalBytes: 8_000_000_000, kind: .apps, flags: .directory)
+            let contents = store.addNode(parent: bundle, name: "Contents", allocBytes: 0, logicalBytes: 0, kind: .apps, flags: .directory)
+            _ = store.addNode(parent: contents, name: "MacOS", allocBytes: 8_000_000_000, logicalBytes: 8_000_000_000, kind: .apps, flags: [])
+        }
+        store.recomputeAll()
+        let layout = TreemapLayout.build(
+            store: store, rootID: root, width: 1400, height: 900,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        let visible = layout.nodes.filter { $0.depth > 0 && $0.width > 1 && $0.height > 1 }
+        let labels = visible.map(\.label)
+        XCTAssertTrue(labels.contains("Xcode.app"), "labels \(labels)")
+        XCTAssertTrue(labels.contains("Support.jdk"), "labels \(labels)")
+        XCTAssertTrue(labels.contains("Bar.bundle") || labels.contains { $0.hasSuffix(".bundle") }, "labels \(labels)")
+        XCTAssertFalse(labels.contains("Contents"))
+        XCTAssertFalse(labels.contains("MacOS"))
+        for node in visible where BundleLeaf.isLeaf(node.label) {
+            XCTAssertEqual(node.childCount, 0, node.label)
+        }
+    }
+
+    func testScreenFourNamedTileCountIsBetweenFortyAndSixty() {
+        let tiles = MacintoshDemoTree.namedTiles(width: 1200, height: 760)
+        let labels = tiles.map(\.label)
+        XCTAssertGreaterThanOrEqual(tiles.count, 40, "named \(tiles.count) labels \(labels)")
+        XCTAssertLessThanOrEqual(tiles.count, 60, "named \(tiles.count) labels \(labels)")
+        XCTAssertTrue(labels.contains { $0.contains("Final Cut") }, "labels \(labels)")
+        XCTAssertTrue(labels.contains("Screen Recordings"), "labels \(labels)")
+        XCTAssertFalse(labels.contains { $0.contains("…") || $0.contains("...") }, "truncated \(labels)")
+        XCTAssertFalse(labels.contains("Contents"))
+        for tile in tiles {
+            XCTAssertFalse(LabelFit.tooThin(width: tile.width, height: tile.height), tile.label)
+            XCTAssertTrue(tile.showsLabel, tile.label)
+        }
+        let report = LayoutAudit.check(store: MacintoshDemoTree.build().store, width: 1200, height: 760)
+        XCTAssertEqual(report.unlabeled, 0)
+    }
+
     func testFolderShareStaysInsideTheDisk() {
         let share = DiskShare(capacity: 1_000_000_000_000, free: 800_000_000_000, volumeName: "Macintosh HD")
         XCTAssertGreaterThan(share.capacity, 0)
@@ -757,6 +814,100 @@ final class ReadableTileTests: XCTestCase {
             BreadcrumbLine.segments(from: ["/System/Volumes/Data/Users/you"]),
             ["Users", "you"]
         )
+    }
+
+
+    func testLargeHeaderTilesAreNotLeftEmpty() {
+        let tree = HomeShapedTree.build(hashDirectories: 400, cacheHashes: 200, devices: 24)
+        let layout = TreemapLayout.build(
+            store: tree.store, rootID: tree.store.rootID, width: 1440, height: 900,
+            options: .browsing(metric: .allocated, zoomed: false)
+        )
+        let rootArea = layout.nodes[layout.root].width * layout.nodes[layout.root].height
+        let cutoff = rootArea * 0.02
+        var empty: [String] = []
+        for node in layout.nodes where node.depth > 0 && node.width > 1 && node.height > 1 {
+            guard node.width * node.height + 0.5 >= cutoff else { continue }
+            guard tree.store.isDirectory(node.id) else { continue }
+            let hasStoreChild = Int(node.id) < tree.store.firstChild.count && tree.store.firstChild[Int(node.id)] != 0
+            guard hasStoreChild else { continue }
+            if BundleLeaf.isLeaf(tree.store.name(of: node.id)) { continue }
+            var visible = 0
+            if node.childCount > 0 {
+                let start = node.childStart
+                let end = start + node.childCount
+                if start >= 0, end <= layout.childIndex.count {
+                    for slot in start..<end {
+                        let child = layout.childIndex[slot]
+                        if layout.nodes.indices.contains(child), layout.nodes[child].width > 1, layout.nodes[child].height > 1 {
+                            visible += 1
+                        }
+                    }
+                }
+            }
+            if visible == 0, node.header >= 1 || !node.showsLabel || node.label.isEmpty {
+                empty.append("\(node.label) \(Int(node.width))x\(Int(node.height)) header=\(Int(node.header))")
+            }
+        }
+        XCTAssertTrue(empty.isEmpty, "empty large headers: \(empty)")
+        let labels = layout.nodes.filter { $0.depth > 0 && $0.width > 1 && $0.height > 1 && $0.showsLabel }.map(\.label)
+        XCTAssertTrue(labels.contains { $0.contains("Library") }, "labels \(labels)")
+        XCTAssertTrue(labels.contains { $0.contains("Application Support") || $0.contains("Caches") || $0.contains("Developer") }, "labels \(labels)")
+        XCTAssertFalse(labels.contains { OpaqueName.isHashOrUUID($0) }, "hash labels \(labels.filter { OpaqueName.isHashOrUUID($0) })")
+    }
+
+    func testJumpTargetsResolveHomeAndDeveloperByExactPath() {
+        let tree = HomeShapedTree.build(hashDirectories: 8, cacheHashes: 4, devices: 2)
+        let prefix = "/Users/you"
+        let home = JumpTargets.resolve(store: tree.store, homePrefix: prefix, key: .home)
+        let homeDev = JumpTargets.resolve(store: tree.store, homePrefix: prefix, key: .homeDeveloper)
+        let libDev = JumpTargets.resolve(store: tree.store, homePrefix: prefix, key: .libraryDeveloper)
+        let downloads = JumpTargets.resolve(store: tree.store, homePrefix: prefix, key: .downloads)
+        XCTAssertEqual(home, tree.home)
+        XCTAssertEqual(homeDev, tree.homeDeveloper)
+        XCTAssertEqual(libDev, tree.libraryDeveloper)
+        XCTAssertEqual(downloads, tree.downloads)
+        XCTAssertNotEqual(homeDev, libDev)
+        XCTAssertGreaterThan(tree.store.bytes(home!, .allocated), 0)
+        XCTAssertNotEqual(tree.store.bytes(homeDev!, .allocated), tree.store.bytes(libDev!, .allocated))
+        XCTAssertNil(JumpTargets.walk(store: tree.store, components: ["Users", "you", "NoSuchFolder"]))
+    }
+
+    func testDrillInTitleUsesTheCollapsedChain() {
+        let tree = HomeShapedTree.build(hashDirectories: 8, cacheHashes: 4, devices: 2)
+        let anki = ChainCollapse.upward(store: tree.store, from: tree.user1, metric: .allocated)
+        XCTAssertTrue(anki.names.contains("Anki2"))
+        XCTAssertTrue(anki.names.contains("User 1"))
+        let ankiTitle = ChainCollapse.titleThatFits(names: anki.names, width: 420, bytes: tree.store.bytes(tree.user1, .allocated))
+        XCTAssertEqual(ankiTitle, "Anki2 / User 1")
+        let device = ChainCollapse.upward(store: tree.store, from: tree.deviceVersion, metric: .allocated)
+        XCTAssertTrue(device.names.contains("iPhone17,4") || device.names.contains("iOS DeviceSupport"))
+        let tight = ChainCollapse.titleThatFits(names: ["Anki2", "User 1"], width: 40, bytes: 655_000_000)
+        XCTAssertEqual(tight, "Anki2")
+    }
+
+    func testOpaqueNamesAreFolded() {
+        XCTAssertTrue(OpaqueName.isHashOrUUID("FE8E1F00AABB"))
+        XCTAssertTrue(OpaqueName.isHashOrUUID("4F1C0000-11ee-4f00-9c00-000000000001"))
+        XCTAssertTrue(OpaqueName.isHashOrUUID("10078500"))
+        XCTAssertFalse(OpaqueName.isHashOrUUID("Caches"))
+        XCTAssertFalse(OpaqueName.isHashOrUUID("Google"))
+        XCTAssertFalse(OpaqueName.isHashOrUUID("Xcode.app"))
+        XCTAssertFalse(OpaqueName.isHashOrUUID("Anki2"))
+    }
+
+    func testHoverCardDoesNotCoverTheTile() {
+        let tile = HoverCardLayout.Rect(x: 100, y: 80, width: 200, height: 160)
+        let origin = HoverCardLayout.origin(
+            cursorX: 140, cursorY: 110, tile: tile, boundsWidth: 1200, boundsHeight: 760
+        )
+        let card = HoverCardLayout.Rect(
+            x: origin.x, y: origin.y,
+            width: HoverCardLayout.cardWidth, height: HoverCardLayout.cardHeight
+        )
+        XCTAssertFalse(card.intersects(tile))
+        XCTAssertGreaterThanOrEqual(origin.x, HoverCardLayout.padding)
+        XCTAssertGreaterThanOrEqual(origin.y, HoverCardLayout.padding)
     }
 
     private func wideFolder(named: String, count: Int) -> NodeStore {

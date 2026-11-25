@@ -9,7 +9,7 @@ public struct TreemapOptions: Equatable, Sendable {
     public var minRecurseHeight: Double
     public var minChildExtent: Double
     public var pinHatchedAside: Bool
-    /// How many levels below the current root this view may draw. 2 is the default; 3 is the ceiling.
+    /// How many levels below the current root this view may draw. 2 is the default; 8 is the ceiling.
     public var maxVisibleDepth: Int
     public var minTileWidth: Double
     public var minTileHeight: Double
@@ -38,7 +38,7 @@ public struct TreemapOptions: Equatable, Sendable {
         self.minRecurseHeight = minRecurseHeight
         self.minChildExtent = minChildExtent
         self.pinHatchedAside = pinHatchedAside
-        self.maxVisibleDepth = min(3, max(1, maxVisibleDepth))
+        self.maxVisibleDepth = min(8, max(1, maxVisibleDepth))
         self.minTileWidth = minTileWidth
         self.minTileHeight = minTileHeight
         self.maxTiles = min(60, max(1, maxTiles))
@@ -53,7 +53,7 @@ public struct TreemapOptions: Equatable, Sendable {
             maxHeaderDepth: 0,
             minRecurseWidth: 40,
             minRecurseHeight: 36,
-            // Two levels of named children under the current root. Three is the ceiling.
+            // Two nested levels below the view root. A collapsed chain counts as one level.
             maxVisibleDepth: 3,
             minTileWidth: 40,
             minTileHeight: 36,
@@ -116,6 +116,7 @@ public struct TreemapLayout: Equatable, Sendable {
         guard rootID != 0, width > 0, height > 0 else { return layout }
         layout.root = layout.place(store: store, id: rootID, x: 0, y: 0, width: width, height: height, depth: 0)
         layout.absorbSingleChildFolders(store: store)
+        layout.fillEmptyHeaders(store: store)
         layout.index = TileGrid.build(nodes: layout.nodes, root: layout.root)
         return layout
     }
@@ -165,6 +166,8 @@ public struct TreemapLayout: Equatable, Sendable {
                 nodes[index].label = chosen
                 nodes[index].headerTitle = combined
                 nodes[index].showsLabel = ok
+                nodes[index].id = child.id
+                nodes[index].sizeBytes = child.sizeBytes
                 let shift = (child.y + child.header) - (nodes[index].y + nodes[index].header)
                 nodes[index].childStart = child.childStart
                 nodes[index].childCount = child.childCount
@@ -177,6 +180,55 @@ public struct TreemapLayout: Equatable, Sendable {
                 nodes[childAt].showsLabel = false
                 changed = true
             }
+        }
+    }
+
+
+    /// A collapsed chain that never received its children is a huge blank tile.
+    /// Fill any large header (about 2% of the view or more) that is still empty.
+    private mutating func fillEmptyHeaders(store: NodeStore) {
+        guard !nodes.isEmpty, nodes.indices.contains(root) else { return }
+        let rootArea = max(1, nodes[root].width * nodes[root].height)
+        let cutoff = rootArea * 0.02
+        var index = 0
+        while index < nodes.count {
+            let node = nodes[index]
+            defer { index += 1 }
+            guard node.depth > 0, node.depth < options.maxVisibleDepth, node.width > 1, node.height > 1 else { continue }
+            guard node.width * node.height + 0.5 >= cutoff else { continue }
+            if BundleLeaf.isLeaf(store.name(of: node.id)) { continue }
+            var visibleKids = 0
+            if node.childCount > 0 {
+                let start = node.childStart
+                let end = start + node.childCount
+                if start >= 0, end <= childIndex.count {
+                    for slot in start..<end {
+                        let child = childIndex[slot]
+                        if nodes.indices.contains(child), nodes[child].width > 1, nodes[child].height > 1 {
+                            visibleKids += 1
+                        }
+                    }
+                }
+            }
+            guard visibleKids == 0 else { continue }
+            guard store.isDirectory(node.id) else { continue }
+            let hasChild = Int(node.id) < store.firstChild.count && store.firstChild[Int(node.id)] != 0
+            guard hasChild else { continue }
+            let header = max(node.header, 18)
+            guard node.height > header + options.minTileHeight else { continue }
+            guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
+            if !labelFits(name: nodes[index].label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) {
+                let leafName = store.name(of: node.id)
+                if labelFits(name: leafName, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) {
+                    nodes[index].label = leafName
+                }
+            }
+            nodes[index].header = header
+            _ = installChildren(
+                store: store, index: index, parent: node.id,
+                x: node.x, y: node.y, width: node.width, height: node.height,
+                depth: node.depth, header: header
+            )
         }
     }
 
@@ -249,7 +301,7 @@ public struct TreemapLayout: Equatable, Sendable {
             isRemainder: remainder, isDepthCapped: false, foldedCount: foldedCount,
             headerTitle: chain.title, sizeBytes: sizeBytes, label: labelName
         ))
-        if remainder || files || store.name(of: leaf).lowercased().hasSuffix(".app") {
+        if remainder || files || BundleLeaf.isLeaf(store.name(of: leaf)) {
             nodes[index].isDepthCapped = false
             nodes[index].showsLabel = labelFits(name: labelName, bytes: sizeBytes, width: width, height: height, header: 0)
             return index
@@ -285,8 +337,9 @@ public struct TreemapLayout: Equatable, Sendable {
     private mutating func openLargestFolders(store: NodeStore) {
         var level = 1
         while level < options.maxVisibleDepth {
-            let opened = openFolders(store: store, depth: level)
-            if !opened { break }
+            // A level that is already filled (opening happened in place()) must not
+            // skip the next level. Those children were placed with opening: false.
+            _ = openFolders(store: store, depth: level)
             level += 1
         }
     }
@@ -303,11 +356,15 @@ public struct TreemapLayout: Equatable, Sendable {
             let room = options.maxTiles - visibleCount()
             if room < 2 { break }
             let node = nodes[index]
-            if store.name(of: node.id).lowercased().hasSuffix(".app") { continue }
+            if BundleLeaf.isLeaf(store.name(of: node.id)) { continue }
             guard node.width >= options.minTileWidth * 2, node.height >= options.minTileHeight * 2 else { continue }
             let header = 18.0
             guard node.height > header + options.minTileHeight else { continue }
-            guard labelFits(name: node.label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) else { continue }
+            if !labelFits(name: nodes[index].label, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) {
+                let leafName = store.name(of: node.id)
+                guard labelFits(name: leafName, bytes: node.sizeBytes, width: node.width, height: node.height, header: header) else { continue }
+                nodes[index].label = leafName
+            }
             guard installChildren(
                 store: store, index: index, parent: node.id,
                 x: node.x, y: node.y, width: node.width, height: node.height,
@@ -415,7 +472,7 @@ public struct TreemapLayout: Equatable, Sendable {
         guard room >= 2, height > header + 8 else { return false }
         // Named tiles plus the files tile plus the tail fold have to fit in the budget,
         // so a later tile is never dropped and its rectangle left blank.
-        let budget = min(12, room)
+        let budget = min(16, room)
         let packed = packChildren(store: store, id: parent, limit: max(1, budget - 2))
         let bodyY = y + header
         let bodyH = height - header
@@ -493,6 +550,16 @@ public struct TreemapLayout: Equatable, Sendable {
             if weight <= 0 { return }
             total += weight
             let isDir = store.isDirectory(child)
+            if OpaqueName.isHashOrUUID(store.name(of: child)) {
+                if isDir {
+                    dirTailCount += 1
+                    dirTailBytes += weight
+                } else {
+                    fileTailCount += 1
+                    fileTailBytes += weight
+                }
+                return
+            }
             let cand = Cand(id: child, weight: weight, isDir: isDir)
             if best.count < keep {
                 if best.isEmpty || weight < best[minIndex].weight { minIndex = best.count }
@@ -523,7 +590,7 @@ public struct TreemapLayout: Equatable, Sendable {
                 minIndex = index
             }
         }
-        let cutoff = total * 0.015
+        let cutoff = total * 0.005
         var named: [Squarify.Item] = []
         named.reserveCapacity(best.count)
         for cand in best.sorted(by: { $0.weight > $1.weight }) {

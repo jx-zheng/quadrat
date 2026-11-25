@@ -43,3 +43,15 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_APP_SANDBOX: NO
+    postBuildScripts:
+      - name: Embed Git SHA
+        basedOnDependencyAnalysis: false
+        script: |
+          SHA=$(git -C "${SRCROOT}" rev-parse --short HEAD 2>/dev/null || true)
+          if [ -z "$SHA" ]; then SHA=dev; fi
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          if [ -f "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :GitCommit ${SHA}" "$PLIST" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :GitCommit string ${SHA}" "$PLIST"
+          fi
+
