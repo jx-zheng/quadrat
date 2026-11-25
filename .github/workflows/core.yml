@@ -1,0 +1,18 @@
+name: core
+
+on:
+  pull_request:
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: swift test
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test QuadratCore
+        run: swift test --package-path Packages/QuadratCore

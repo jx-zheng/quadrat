@@ -1,0 +1,289 @@
+name: macos
+
+on:
+  pull_request:
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "project.yml"
+      - "scripts/**"
+      - ".github/workflows/macos.yml"
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: build, snapshot, perf, leaks
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project Quadrat.xcodeproj \
+            -scheme Quadrat \
+            -configuration Release \
+            -derivedDataPath /tmp/quadrat-dd \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=YES \
+            build
+
+      - name: Locate app
+        id: app
+        run: |
+          APP="/tmp/quadrat-dd/Build/Products/Release/Quadrat.app"
+          test -d "$APP"
+          echo "path=$APP" >> "$GITHUB_OUTPUT"
+          echo "bin=$APP/Contents/MacOS/Quadrat" >> "$GITHUB_OUTPUT"
+
+      - name: Snapshot screens
+        run: |
+          mkdir -p /tmp/quadrat-snapshots
+          "${{ steps.app.outputs.bin }}" --snapshot /tmp/quadrat-snapshots
+          find /tmp/quadrat-snapshots -name 'screen-*.png' | sort
+
+      - name: Synthesize on-disk tree
+        run: python3 scripts/synthesize_tree.py /tmp/quadrat-synth 1500000
+
+      - name: Perf
+        run: |
+          mkdir -p /tmp/quadrat-perf
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" \
+            --perf /tmp/quadrat-synth \
+            --out /tmp/quadrat-perf/perf.json \
+            --idle-seconds 30 \
+            > /tmp/quadrat-perf/stdout.txt 2> /tmp/quadrat-perf/time.txt
+          python3 -m json.tool /tmp/quadrat-perf/perf.json >/dev/null
+          python3 scripts/check_main_perf.py /tmp/quadrat-perf/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-perf/time.txt
+          rm -rf /tmp/quadrat-synth
+
+      - name: Leaks
+        run: |
+          APP="${{ steps.app.outputs.path }}"
+          codesign --force --deep --sign - --entitlements scripts/ci-get-task-allow.entitlements "$APP"
+          mkdir -p /tmp/quadrat-leaks-dir /tmp/quadrat-leaks
+          python3 scripts/synthesize_tree.py /tmp/quadrat-leaks-dir 3000
+          set +e
+          leaks --atExit -- "${{ steps.app.outputs.bin }}" \
+            --perf /tmp/quadrat-leaks-dir \
+            --out /tmp/quadrat-leaks/perf.json \
+            --skip-root \
+            --skip-synthetic \
+            --idle-seconds 0 > /tmp/quadrat-leaks/leaks.txt
+          status=$?
+          set -e
+          tail -n 40 /tmp/quadrat-leaks/leaks.txt
+          if grep -E "leaks for" /tmp/quadrat-leaks/leaks.txt | grep -v "0 leaks for"; then
+            echo "leaks reported allocations" >&2
+            exit 1
+          fi
+          if ! grep -q "0 leaks for" /tmp/quadrat-leaks/leaks.txt; then
+            echo "leaks did not report a clean result (exit $status)" >&2
+            exit 1
+          fi
+
+      - name: Messy tree
+        run: python3 scripts/messy_tree.py /tmp/quadrat-messy
+
+      - name: Messy perf and snapshots
+        run: |
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" \
+            --perf-path /tmp/quadrat-messy \
+            --out /tmp/quadrat-messy/perf.json \
+            > /tmp/quadrat-messy/stdout.txt 2> /tmp/quadrat-messy/time.txt
+          python3 scripts/check_messy_perf.py /tmp/quadrat-messy/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-messy/time.txt
+          "${{ steps.app.outputs.bin }}" \
+            --snapshot-path /tmp/quadrat-messy \
+            --snapshot-out /tmp/quadrat-messy/messy-light.png \
+            --snapshot-scheme light
+          "${{ steps.app.outputs.bin }}" \
+            --snapshot-path /tmp/quadrat-messy \
+            --snapshot-out /tmp/quadrat-messy/messy-dark.png \
+            --snapshot-scheme dark
+          find /tmp/quadrat-messy -mindepth 1 -maxdepth 1 ! -name perf.json ! -name 'messy-*.png' -exec rm -rf {} +
+
+      - name: Wide directory zoom
+        run: |
+          mkdir -p /tmp/quadrat-zoom
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" --zoom-wide \
+            --out /tmp/quadrat-zoom/perf.json \
+            > /tmp/quadrat-zoom/stdout.txt 2> /tmp/quadrat-zoom/time.txt
+          python3 scripts/check_wide_zoom.py /tmp/quadrat-zoom/perf.json
+          python3 scripts/check_process_memory.py /tmp/quadrat-zoom/time.txt
+
+      - name: Leaf tile pixel check
+        run: |
+          mkdir -p /tmp/quadrat-pixel
+          "${{ steps.app.outputs.bin }}" --pixel-check /tmp/quadrat-pixel/leaf.png
+
+      - name: Volume, home, and drill snapshots
+        run: |
+          mkdir -p /tmp/quadrat-volume
+          /usr/bin/time -l "${{ steps.app.outputs.bin }}" --snapshot-suite /tmp/quadrat-volume \
+            > /tmp/quadrat-volume/stdout.txt 2> /tmp/quadrat-volume/time.txt
+          python3 scripts/check_process_memory.py /tmp/quadrat-volume/time.txt
+          find /tmp/quadrat-volume -name '*.png' | sort
+
+      - name: Upload snapshots and perf
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-results
+          path: |
+            /tmp/quadrat-snapshots/
+            /tmp/quadrat-perf/perf.json
+            /tmp/quadrat-perf/time.txt
+            /tmp/quadrat-leaks/leaks.txt
+            /tmp/quadrat-pixel/leaf.png
+          if-no-files-found: error
+
+      - name: Upload messy fixture snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-messy
+          path: |
+            /tmp/quadrat-messy/perf.json
+            /tmp/quadrat-messy/messy-light.png
+            /tmp/quadrat-messy/messy-dark.png
+          if-no-files-found: error
+
+      - name: Upload volume snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-volume
+          path: /tmp/quadrat-volume/
+          if-no-files-found: error
+
+  demo:
+    name: demo video
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project Quadrat.xcodeproj \
+            -scheme Quadrat \
+            -configuration Release \
+            -derivedDataPath /tmp/quadrat-dd \
+            -destination "platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_HARDENED_RUNTIME=YES \
+            build
+
+      - name: Locate app
+        id: app
+        run: |
+          APP="/tmp/quadrat-dd/Build/Products/Release/Quadrat.app"
+          test -d "$APP"
+          echo "bin=$APP/Contents/MacOS/Quadrat" >> "$GITHUB_OUTPUT"
+
+      - name: Demo video
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/quadrat-demo
+          BIN="${{ steps.app.outputs.bin }}"
+          MOV=/tmp/quadrat-demo/capture.mov
+          OUT=/tmp/quadrat-demo/quadrat-demo.mp4
+          defaults write com.apple.dock autohide -bool true
+          killall Dock || true
+          defaults write com.apple.finder CreateDesktop -bool false
+          killall Finder || true
+          if ! command -v ffmpeg >/dev/null; then
+            brew install ffmpeg
+          fi
+          swiftc scripts/set_display.swift -o /tmp/set_display
+          /tmp/set_display
+          swiftc scripts/window_id.swift -o /tmp/window_id
+          "$BIN" --demo > /tmp/quadrat-demo/app.log 2>&1 &
+          APP=$!
+          sleep 2
+          RECT=""
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            sleep 0.5
+            RECT="$(/tmp/window_id | head -n 1 || true)"
+            if [ -n "$RECT" ]; then
+              break
+            fi
+          done
+          echo "window rect: ${RECT:-none}"
+          if [ -n "$RECT" ]; then
+            screencapture -R "$RECT" -V 80 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          else
+            screencapture -V 80 "$MOV" >/tmp/quadrat-demo/screencapture.log 2>&1 &
+          fi
+          CAP=$!
+          wait "$APP" || true
+          # Let screencapture finish the file. Trailing black is cut below.
+          wait "$CAP" || true
+          echo "--- screencapture log ---"
+          cat /tmp/quadrat-demo/screencapture.log || true
+          test -s "$MOV"
+          wc -c "$MOV"
+          # Drop the black frames left after the window closes. The script already
+          # holds for about two seconds after Cancel.
+          BLACK_START="$(ffmpeg -i "$MOV" -vf "blackdetect=d=0.5:pic_th=0.98:pix_th=0.10" -an -f null - 2>&1 | awk -F'black_start:' '/black_start:/ {print $2}' | awk '{print $1}' | tail -n 1 || true)"
+          DURATION="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$MOV")"
+          TRIM="$DURATION"
+          if [ -n "$BLACK_START" ]; then
+            python3 - <<PY
+          start = float("$BLACK_START")
+          duration = float("$DURATION")
+          if start > 50 and duration - start < 30:
+              open("/tmp/quadrat-demo/trim.txt","w").write(f"{start + 0.4:.3f}")
+          else:
+              open("/tmp/quadrat-demo/trim.txt","w").write(f"{duration:.3f}")
+          PY
+            TRIM="$(cat /tmp/quadrat-demo/trim.txt)"
+          fi
+          echo "trim to $TRIM (black at ${BLACK_START:-none})"
+          ffmpeg -y -i "$MOV" -t "$TRIM" -r 60 -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          python3 - <<'PY'
+          import json, subprocess
+          raw = subprocess.check_output([
+              "ffprobe", "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration",
+              "-of", "json", "/tmp/quadrat-demo/quadrat-demo.mp4",
+          ])
+          info = json.loads(raw)
+          stream = info["streams"][0]
+          width, height = int(stream["width"]), int(stream["height"])
+          duration = float(info["format"]["duration"])
+          num, den = stream["avg_frame_rate"].split("/")
+          fps = float(num) / float(den) if float(den) else 0
+          print(f"demo {width}x{height} {stream['codec_name']} {fps:.1f}fps {duration:.1f}s")
+          assert stream["codec_name"] == "h264", stream["codec_name"]
+          assert width >= 1280 and height >= 800, (width, height)
+          assert fps >= 30, fps
+          assert 60 <= duration <= 90, duration
+          PY
+
+      - name: Upload demo
+        uses: actions/upload-artifact@v4
+        with:
+          name: quadrat-demo
+          path: /tmp/quadrat-demo/quadrat-demo.mp4
+          if-no-files-found: error
