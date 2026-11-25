@@ -146,15 +146,21 @@ public struct TreemapLayout: Equatable, Sendable {
         let leaf = chain.leaf
         let index = nodes.count
         let sizeBytes = (remainder || files) ? foldedBytes : store.bytes(leaf, options.metric)
-        let labelName: String
+        let leafName: String
         if files {
-            labelName = "\(max(foldedCount, 1)) files"
-        } else if !chain.title.isEmpty {
-            labelName = chain.title
+            leafName = "\(max(foldedCount, 1)) files"
         } else if remainder {
-            labelName = "\(max(foldedCount, 1)) smaller items"
+            leafName = "\(max(foldedCount, 1)) smaller items"
         } else {
-            labelName = store.name(of: leaf)
+            leafName = store.name(of: leaf)
+        }
+        // The full chain is the breadcrumb. On the tile it is used only when it fits;
+        // otherwise the leaf name is what gets drawn.
+        let labelName: String
+        if !chain.title.isEmpty, labelFits(name: chain.title, bytes: sizeBytes, width: width, height: height, header: 0) {
+            labelName = chain.title
+        } else {
+            labelName = leafName
         }
         nodes.append(TreemapNode(
             id: leaf, x: x, y: y, width: width, height: height,
